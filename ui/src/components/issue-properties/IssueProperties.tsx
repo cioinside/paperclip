@@ -35,6 +35,7 @@ import { useStreamlinedUiEnabled } from "@/hooks/useStreamlinedUiEnabled";
 import { selectArtifactAttachments } from "@/lib/issue-artifacts";
 import { useCompany } from "../../context/CompanyContext";
 import { useSidebar } from "../../context/SidebarContext";
+import { useOptionalToastActions } from "../../context/ToastContext";
 import { queryKeys } from "../../lib/queryKeys";
 import { ACCOUNT_BOUND_MODEL_DISCOVERY_QUERY_OPTIONS, nativeTaskModelCatalogOptions } from "../../lib/native-model-catalog";
 import { buildCompanyUserInlineOptions, buildCompanyUserLabelMap, buildCompanyUserProfileMap, isAgentTaskTarget } from "../../lib/company-members";
@@ -1115,6 +1116,43 @@ export function IssueProperties({
     }
     return `${stageLabel} pending${participantLabel ? ` with ${participantLabel}` : ""}`;
   })();
+  const pendingStageDecision = (() => {
+    const state = issue.executionState;
+    if (!state || state.status !== "pending") return null;
+    if (state.currentStageType !== "review" && state.currentStageType !== "approval") return null;
+    const participant = state.currentParticipant;
+    if (participant?.type !== "user" || !participant.userId) return null;
+    if (participant.userId !== currentUserId) return null;
+    return state;
+  })();
+  const [stageDecisionComment, setStageDecisionComment] = useState("");
+  const stageDecisionToasts = useOptionalToastActions();
+  const submitStageDecision = useMutation({
+    mutationFn: (status: "done" | "in_progress") =>
+      issuesApi.update(issue.id, { status, comment: stageDecisionComment.trim() }),
+    onSuccess: (_updated, status) => {
+      setStageDecisionComment("");
+      void queryClient.invalidateQueries({ queryKey: queryKeys.issues.detail(issue.id) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.issues.activity(issue.id) });
+      if (companyId) invalidateInboxIssueQueries(queryClient, companyId);
+      stageDecisionToasts?.pushToast({
+        title: status === "done"
+          ? "Approved — stage cleared."
+          : "Changes requested — returned to the assignee.",
+        tone: "success",
+      });
+    },
+  });
+  const stageDecisionReady = stageDecisionComment.trim().length > 0;
+  const stageDecisionError =
+    submitStageDecision.error instanceof Error ? submitStageDecision.error.message : null;
+  const stageDecisionKey = pendingStageDecision
+    ? `${pendingStageDecision.currentStageType}:${pendingStageDecision.currentParticipant?.userId ?? ""}`
+    : null;
+  useEffect(() => {
+    setStageDecisionComment("");
+    submitStageDecision.reset();
+  }, [stageDecisionKey, issue.id, submitStageDecision.reset]);
   useEffect(() => {
     setMonitorAtInput(toDateTimeLocalValue(executionPolicy?.monitor?.nextCheckAt));
     setMonitorNotesInput(executionPolicy?.monitor?.notes ?? "");
@@ -2716,6 +2754,63 @@ export function IssueProperties({
           <PropertyRow label="Execution">
             <span className="text-sm truncate min-w-0" title={currentExecutionLabel}>{currentExecutionLabel}</span>
           </PropertyRow>
+        )}
+
+        {pendingStageDecision && (
+          <div
+            className="rounded-md border border-border bg-muted/40 p-3 space-y-2"
+            data-testid="execution-stage-decision-card"
+          >
+            <p className="text-sm font-medium text-foreground">
+              {pendingStageDecision.currentStageType === "review" ? "Review" : "Approval"} decision needed
+            </p>
+            <Textarea
+              value={stageDecisionComment}
+              onChange={(event) => {
+                setStageDecisionComment(event.target.value);
+                if (submitStageDecision.isError) submitStageDecision.reset();
+              }}
+              rows={3}
+              className="text-xs"
+              placeholder="Required — this becomes the decision comment on the task."
+              data-testid="execution-stage-decision-comment"
+              aria-label="Decision comment"
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs"
+                disabled={!stageDecisionReady || submitStageDecision.isPending}
+                title={stageDecisionReady ? undefined : "Add a decision comment first"}
+                onClick={() => submitStageDecision.mutate("in_progress")}
+                data-testid="execution-stage-request-changes"
+              >
+                {submitStageDecision.variables === "in_progress" && submitStageDecision.isPending
+                  ? "Sending back…"
+                  : "Request changes"}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                className="h-7 text-xs"
+                disabled={!stageDecisionReady || submitStageDecision.isPending}
+                title={stageDecisionReady ? undefined : "Add a decision comment first"}
+                onClick={() => submitStageDecision.mutate("done")}
+                data-testid="execution-stage-approve"
+              >
+                {submitStageDecision.variables === "done" && submitStageDecision.isPending
+                  ? "Approving…"
+                  : "Approve"}
+              </Button>
+            </div>
+            {stageDecisionError && (
+              <p className="text-xs text-destructive" data-testid="execution-stage-decision-error">
+                {stageDecisionError}
+              </p>
+            )}
+          </div>
         )}
 
         {showScheduledRetryRow && scheduledRetry?.scheduledRetryReason === "workspace_busy" ? (
