@@ -3,15 +3,31 @@
 The patches Syndicate runs on the deployed Paperclip build, kept here so that this
 fork carries them and they can be read, rebased and sent upstream.
 
-Base of this branch: tag `v2026.1117.0` — the version the live instance runs.
+The patch set is the one for tag `v2026.1117.0` — the version the live instance runs.
 
 ## Applied on this branch (source level)
 
 | commit | patch | what it does |
 | --- | --- | --- |
-| `feat(ui): fallbackModel picker in the agent config form` | `ui/2026.1117.0/SOURCE-fallback-ui.patch` | the fallback model picker in the agent config form |
-| `feat(ui): execution stage-decision card in issue properties` | `ui/2026.1117.0/SOURCE-stage-decision-ui.patch` | the stage-decision card in issue properties |
 | `fix(server): name the exact secret key in the access-denied answer` | source twin of `server/2026.1117.0/SOURCE-secrets.patch` | the 403 body points at `GET /api/agents/me/secrets` |
+
+The two UI patches are in `ui/2026.1117.0/` and are applied as code in
+`branch-on-upstream-master/series-4-commits.patch` — see the note below.
+
+## Ready-to-push series on upstream master
+
+`branch-on-upstream-master/` holds the same patch set rebased onto current
+upstream master (`base-commit.txt` names the commit): the two UI patches as
+source commits, the secrets hint and this patch set. Apply it with
+`git am series-4-commits.patch` once the fork holds upstream master.
+
+It is a file here and not a branch because the token this fork is pushed with
+has no `workflow` scope, and GitHub refuses any push into this repository that
+would create or update a file under `.github/workflows/`. Upstream master
+carries 21 new and 14 changed CI workflow files, so a branch with upstream
+master's tree cannot be pushed at all. The same scope blocks the fork's own
+`sync with upstream`. A token with `workflow` scope (or a fine-grained token
+with Contents:write and Workflows:write) removes both limits.
 
 ## Patch files for the published build
 
@@ -35,7 +51,7 @@ and the porting notes.
 ## Not applied here
 
 `not-applied-here/` holds our source-level patches that were written against a
-different upstream state and do not apply to `v2026.1117.0` as they are:
+different upstream state and do not apply to the fork's own base as they are:
 
 - `5c0e6a2f-...-issue-scoped-run-lookup.patch` — the source-level twin of the server
   run-lookup patch, written against upstream master of 2026-11-12;

@@ -1,0 +1,3502 @@
+From 8896cdd82e7d3b507d2d6e4167737108dce0b9a9 Mon Sep 17 00:00:00 2001
+From: cioinside <cioinside@users.noreply.github.com>
+Date: Tue, 24 Nov 2026 08:55:13 +0000
+Subject: [PATCH 1/4] feat(ui): fallbackModel picker in the agent config form
+
+Our patch, carried over from the deployed 2026.1117.0 build (SOURCE-fallback-ui.patch).
+---
+ ui/src/components/AgentConfigForm.tsx         | 36 ++++++++++++++++---
+ ui/src/components/agent-config-primitives.tsx |  1 +
+ 2 files changed, 32 insertions(+), 5 deletions(-)
+
+diff --git a/ui/src/components/AgentConfigForm.tsx b/ui/src/components/AgentConfigForm.tsx
+index b6d4b3440..86a5be25a 100644
+--- a/ui/src/components/AgentConfigForm.tsx
++++ b/ui/src/components/AgentConfigForm.tsx
+@@ -1192,6 +1192,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
+   );
+   // Popover states
+   const [modelOpen, setModelOpen] = useState(false);
++  const [fallbackModelOpen, setFallbackModelOpen] = useState(false);
+   const [thinkingEffortOpen, setThinkingEffortOpen] = useState(false);
+ 
+   function buildAdapterConfigForTest(adapterConfigPatch?: Record<string, unknown>): Record<string, unknown> {
+@@ -1478,6 +1479,9 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
+     ? val!.model ?? ""
+     : eff("adapterConfig", "model", String(config.model ?? ""));
+   const currentModelId = typeof currentModelValue === "string" ? currentModelValue : "";
++  const currentFallbackModelId = !isCreate
++    ? eff("adapterConfig", "fallbackModel", String(config.fallbackModel ?? ""))
++    : "";
+ 
+   async function handleRefreshModels() {
+     if (!selectedCompanyId) return;
+@@ -1933,6 +1937,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
+                         modelReasoningEffort: "",
+                         variant: "",
+                         mode: "",
++                        fallbackModel: "",
+                         ...(external
+                             ? { provider: muse ? "muse" : "openai_dot", lifecycleMode: "per_turn", allowUnmeteredProvider: false, ...(dot ? { dotAttachmentAccess: false, dotWorkspaceAccess: false } : {}) }
+                           : t === "paperclip_runner"
+@@ -2083,9 +2088,26 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
+                 </p>
+               )}
+ 
+-              {showThinkingEffort && (
+-                <>
+-                  <ThinkingEffortDropdown
++               {adapterType === "opencode_local" && !isCreate && (
++                 <ModelDropdown
++                   models={models}
++                   value={currentFallbackModelId}
++                   onChange={(v) => mark("adapterConfig", "fallbackModel", v || undefined)}
++                   open={fallbackModelOpen}
++                   onOpenChange={setFallbackModelOpen}
++                   allowDefault
++                   required={false}
++                   groupByProvider
++                   creatable
++                   defaultLabel="No fallback"
++                   label="Fallback model"
++                   hint={help.fallbackModel}
++                 />
++               )}
++
++               {showThinkingEffort && (
++                 <>
++                   <ThinkingEffortDropdown
+                     value={currentThinkingEffort}
+                     options={thinkingEffortOptions}
+                     onChange={(v) =>
+@@ -4137,6 +4159,8 @@ export function ModelDropdown({
+   detectModelLabel,
+   emptyDetectHint,
+   defaultLabel,
++  label = "Model",
++  hint = help.model,
+   presentation = "searchable",
+   groupModel,
+ }: {
+@@ -4160,6 +4184,8 @@ export function ModelDropdown({
+   detectModelLabel?: string;
+   emptyDetectHint?: string;
+   defaultLabel?: string;
++  label?: string;
++  hint?: string;
+   presentation?: "searchable" | "native";
+   /** Groups a curated list by model family, keeping its order; each entry shows
+    * the variant (for example a thinking level) and an optional note. */
+@@ -4254,7 +4280,7 @@ export function ModelDropdown({
+     const customOption = "__paperclip_custom_model__";
+     const extraModels = [...new Set([value, ...promotedModelIds])].filter(id => id && (!models.some(model => model.id === id) || promotedModelIds.has(id)));
+     return (
+-      <Field label="Model" hint={help.model}>
++      <Field label={label} hint={hint}>
+         <NativeSelect
+           aria-label="Model"
+           aria-busy={loadingModels || refreshingModels}
+@@ -4292,7 +4318,7 @@ export function ModelDropdown({
+   }
+ 
+   return (
+-    <Field label="Model" hint={help.model}>
++    <Field label={label} hint={hint}>
+       <SelectPopover aria-label="Model" value={value}
+         displayValue={<span className={cn("truncate", !value && "text-muted-foreground")}>
+           {selected?.label ?? (value || (allowDefault ? (defaultLabel ?? "Default") : required ? "Select model (required)" : "Select model"))}
+diff --git a/ui/src/components/agent-config-primitives.tsx b/ui/src/components/agent-config-primitives.tsx
+index f4bc17261..6993746ad 100644
+--- a/ui/src/components/agent-config-primitives.tsx
++++ b/ui/src/components/agent-config-primitives.tsx
+@@ -29,6 +29,7 @@ export const help: Record<string, string> = {
+   cwd: "Deprecated legacy working directory fallback for local adapters. Existing agents may still carry this value, but new configurations should use project workspaces instead.",
+   promptTemplate: "Sent on every heartbeat. Keep this small and dynamic. Use it for current-task framing, not large static instructions. Supports {{ agent.id }}, {{ agent.name }}, {{ agent.role }} and other template variables.",
+   model: "Override the default model used by the adapter.",
++  fallbackModel: "Optional OpenCode fallback model (provider/model) for a single retry when the provider reports token or quota exhaustion.",
+   thinkingEffort: "Control model reasoning depth. Supported values vary by adapter/model.",
+   chrome: "Enable Claude's Chrome integration by passing --chrome.",
+   dangerouslySkipPermissions: "Run unattended by auto-approving adapter permission prompts when supported.",
+-- 
+2.43.0
+
+
+From 6c546dd2b74cdd6fbbe2fc904810ef8110e86fd0 Mon Sep 17 00:00:00 2001
+From: cioinside <cioinside@users.noreply.github.com>
+Date: Tue, 24 Nov 2026 08:55:13 +0000
+Subject: [PATCH 2/4] feat(ui): execution stage-decision card in issue
+ properties
+
+Our patch, carried over from the deployed 2026.1117.0 build (SOURCE-stage-decision-ui.patch).
+---
+ .../issue-properties/IssueProperties.tsx      | 95 +++++++++++++++++++
+ 1 file changed, 95 insertions(+)
+
+diff --git a/ui/src/components/issue-properties/IssueProperties.tsx b/ui/src/components/issue-properties/IssueProperties.tsx
+index 86b1a97e2..26b3f02f5 100644
+--- a/ui/src/components/issue-properties/IssueProperties.tsx
++++ b/ui/src/components/issue-properties/IssueProperties.tsx
+@@ -35,6 +35,7 @@ import { useStreamlinedUiEnabled } from "@/hooks/useStreamlinedUiEnabled";
+ import { selectArtifactAttachments } from "@/lib/issue-artifacts";
+ import { useCompany } from "../../context/CompanyContext";
+ import { useSidebar } from "../../context/SidebarContext";
++import { useOptionalToastActions } from "../../context/ToastContext";
+ import { queryKeys } from "../../lib/queryKeys";
+ import { ACCOUNT_BOUND_MODEL_DISCOVERY_QUERY_OPTIONS, nativeTaskModelCatalogOptions } from "../../lib/native-model-catalog";
+ import { buildCompanyUserInlineOptions, buildCompanyUserLabelMap, buildCompanyUserProfileMap, isAgentTaskTarget } from "../../lib/company-members";
+@@ -1115,6 +1116,43 @@ export function IssueProperties({
+     }
+     return `${stageLabel} pending${participantLabel ? ` with ${participantLabel}` : ""}`;
+   })();
++  const pendingStageDecision = (() => {
++    const state = issue.executionState;
++    if (!state || state.status !== "pending") return null;
++    if (state.currentStageType !== "review" && state.currentStageType !== "approval") return null;
++    const participant = state.currentParticipant;
++    if (participant?.type !== "user" || !participant.userId) return null;
++    if (participant.userId !== currentUserId) return null;
++    return state;
++  })();
++  const [stageDecisionComment, setStageDecisionComment] = useState("");
++  const stageDecisionToasts = useOptionalToastActions();
++  const submitStageDecision = useMutation({
++    mutationFn: (status: "done" | "in_progress") =>
++      issuesApi.update(issue.id, { status, comment: stageDecisionComment.trim() }),
++    onSuccess: (_updated, status) => {
++      setStageDecisionComment("");
++      void queryClient.invalidateQueries({ queryKey: queryKeys.issues.detail(issue.id) });
++      void queryClient.invalidateQueries({ queryKey: queryKeys.issues.activity(issue.id) });
++      if (companyId) invalidateInboxIssueQueries(queryClient, companyId);
++      stageDecisionToasts?.pushToast({
++        title: status === "done"
++          ? "Approved — stage cleared."
++          : "Changes requested — returned to the assignee.",
++        tone: "success",
++      });
++    },
++  });
++  const stageDecisionReady = stageDecisionComment.trim().length > 0;
++  const stageDecisionError =
++    submitStageDecision.error instanceof Error ? submitStageDecision.error.message : null;
++  const stageDecisionKey = pendingStageDecision
++    ? `${pendingStageDecision.currentStageType}:${pendingStageDecision.currentParticipant?.userId ?? ""}`
++    : null;
++  useEffect(() => {
++    setStageDecisionComment("");
++    submitStageDecision.reset();
++  }, [stageDecisionKey, issue.id, submitStageDecision.reset]);
+   useEffect(() => {
+     setMonitorAtInput(toDateTimeLocalValue(executionPolicy?.monitor?.nextCheckAt));
+     setMonitorNotesInput(executionPolicy?.monitor?.notes ?? "");
+@@ -2718,6 +2756,63 @@ export function IssueProperties({
+           </PropertyRow>
+         )}
+ 
++        {pendingStageDecision && (
++          <div
++            className="rounded-md border border-border bg-muted/40 p-3 space-y-2"
++            data-testid="execution-stage-decision-card"
++          >
++            <p className="text-sm font-medium text-foreground">
++              {pendingStageDecision.currentStageType === "review" ? "Review" : "Approval"} decision needed
++            </p>
++            <Textarea
++              value={stageDecisionComment}
++              onChange={(event) => {
++                setStageDecisionComment(event.target.value);
++                if (submitStageDecision.isError) submitStageDecision.reset();
++              }}
++              rows={3}
++              className="text-xs"
++              placeholder="Required — this becomes the decision comment on the task."
++              data-testid="execution-stage-decision-comment"
++              aria-label="Decision comment"
++            />
++            <div className="flex flex-wrap items-center gap-2">
++              <Button
++                type="button"
++                size="sm"
++                variant="outline"
++                className="h-7 text-xs"
++                disabled={!stageDecisionReady || submitStageDecision.isPending}
++                title={stageDecisionReady ? undefined : "Add a decision comment first"}
++                onClick={() => submitStageDecision.mutate("in_progress")}
++                data-testid="execution-stage-request-changes"
++              >
++                {submitStageDecision.variables === "in_progress" && submitStageDecision.isPending
++                  ? "Sending back…"
++                  : "Request changes"}
++              </Button>
++              <Button
++                type="button"
++                size="sm"
++                className="h-7 text-xs"
++                disabled={!stageDecisionReady || submitStageDecision.isPending}
++                title={stageDecisionReady ? undefined : "Add a decision comment first"}
++                onClick={() => submitStageDecision.mutate("done")}
++                data-testid="execution-stage-approve"
++              >
++                {submitStageDecision.variables === "done" && submitStageDecision.isPending
++                  ? "Approving…"
++                  : "Approve"}
++              </Button>
++            </div>
++            {stageDecisionError && (
++              <p className="text-xs text-destructive" data-testid="execution-stage-decision-error">
++                {stageDecisionError}
++              </p>
++            )}
++          </div>
++        )}
++
+         {showScheduledRetryRow && scheduledRetry?.scheduledRetryReason === "workspace_busy" ? (
+           <PropertyRow label="Workspace">
+             <span className="text-sm text-muted-foreground">Waiting for workspace</span>
+-- 
+2.43.0
+
+
+From b9732cd3f99def28ad6993ea701d4b28f9d1916b Mon Sep 17 00:00:00 2001
+From: cioinside <cioinside@users.noreply.github.com>
+Date: Tue, 24 Nov 2026 08:55:13 +0000
+Subject: [PATCH 3/4] fix(server): name the exact secret key in the
+ access-denied answer
+
+Our patch (SOURCE-secrets-src.patch): the 403 body points at GET /api/agents/me/secrets
+instead of the bare 'not granted' text.
+---
+ server/src/routes/secrets.ts | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/server/src/routes/secrets.ts b/server/src/routes/secrets.ts
+index 2250b3be7..9b94f6546 100644
+--- a/server/src/routes/secrets.ts
++++ b/server/src/routes/secrets.ts
+@@ -341,7 +341,7 @@ export function secretRoutes(db: Db, deps: SecretRoutesDeps = {}) {
+     const context = agentSecretContext(req);
+     const available = await svc.listAgentSecretAccess(context.companyId, context);
+     const secret = available.find((entry) => entry.key === req.params.key);
+-    if (!secret) throw forbidden("Secret access is not granted for this agent");
++    if (!secret) throw forbidden("Secret access is not granted for this agent. Use the exact `key` from GET /api/agents/me/secrets (name with / replaced by -).");
+     const resolution = await svc.resolveSecretValueForAgentAccess(
+       context.companyId,
+       secret.secretId,
+-- 
+2.43.0
+
+
+From b1780aa95a2d092cd3299c3a5bbcd7233d0cc1be Mon Sep 17 00:00:00 2001
+From: cioinside <cioinside@users.noreply.github.com>
+Date: Tue, 24 Nov 2026 08:56:21 +0000
+Subject: [PATCH 4/4] chore(patches): carry our patch set for the deployed
+ 2026.1117.0 build
+
+The server and adapter patches patch the published npm output, so they are kept
+as files here with their manifests; the three source-level patches are already
+applied as commits on this branch.
+---
+ patches/syndicate/README.md                   |  46 ++
+ .../adapter/2026.1117.0/PATCH-MANIFEST.txt    |  85 +++
+ .../SOURCE-small-model-session.patch          |  17 +
+ ...a9844929e1f5-issue-scoped-run-lookup.patch | 497 ++++++++++++++++++
+ .../not-applied-here/SOURCE-fallback.patch    | 213 ++++++++
+ .../stuck-inprogress-recovery.patch           | 208 ++++++++
+ .../server/2026.1117.0/PATCH-MANIFEST.txt     |  98 ++++
+ .../SOURCE-issue-scoped-run-lookup.patch      |  98 ++++
+ .../SOURCE-routine-dispatch-conflict.patch    |  84 +++
+ .../server/2026.1117.0/SOURCE-secrets.patch   |  11 +
+ .../in-review-handoff-stop/PATCH-MANIFEST.txt |  14 +
+ .../SOURCE-in-review-handoff-stop.patch       |  10 +
+ .../mcp-tools-call-timeout/PATCH-MANIFEST.txt |  91 ++++
+ .../SOURCE-mcp-tools-call-timeout.patch       |  50 ++
+ .../live-check-mcp-tools-call-timeout.sh      |  47 ++
+ .../standalone-mcp-gateway-check.mjs          | 149 ++++++
+ .../test-mcp-tools-call-timeout.mjs           | 118 +++++
+ .../question-answer-resume/PATCH-MANIFEST.txt | 135 +++++
+ .../SOURCE-question-answer-resume.patch       |  81 +++
+ .../PATCH-MANIFEST.txt                        |  95 ++++
+ ...CE-task-session-keep-on-reassignment.patch |  21 +
+ .../session-preparation.js                    | 270 ++++++++++
+ .../ui/2026.1117.0/PATCH-MANIFEST.txt         |  89 ++++
+ .../ui/2026.1117.0/SOURCE-fallback-ui.patch   | 108 ++++
+ .../SOURCE-stage-decision-ui.patch            | 364 +++++++++++++
+ 25 files changed, 2999 insertions(+)
+ create mode 100644 patches/syndicate/README.md
+ create mode 100644 patches/syndicate/adapter/2026.1117.0/PATCH-MANIFEST.txt
+ create mode 100644 patches/syndicate/adapter/2026.1117.0/SOURCE-small-model-session.patch
+ create mode 100644 patches/syndicate/not-applied-here/5c0e6a2f-a323-45b5-b15c-a9844929e1f5-issue-scoped-run-lookup.patch
+ create mode 100644 patches/syndicate/not-applied-here/SOURCE-fallback.patch
+ create mode 100644 patches/syndicate/not-applied-here/stuck-inprogress-recovery.patch
+ create mode 100644 patches/syndicate/server/2026.1117.0/PATCH-MANIFEST.txt
+ create mode 100644 patches/syndicate/server/2026.1117.0/SOURCE-issue-scoped-run-lookup.patch
+ create mode 100644 patches/syndicate/server/2026.1117.0/SOURCE-routine-dispatch-conflict.patch
+ create mode 100644 patches/syndicate/server/2026.1117.0/SOURCE-secrets.patch
+ create mode 100644 patches/syndicate/server/2026.1117.0/in-review-handoff-stop/PATCH-MANIFEST.txt
+ create mode 100644 patches/syndicate/server/2026.1117.0/in-review-handoff-stop/SOURCE-in-review-handoff-stop.patch
+ create mode 100644 patches/syndicate/server/2026.1117.0/mcp-tools-call-timeout/PATCH-MANIFEST.txt
+ create mode 100644 patches/syndicate/server/2026.1117.0/mcp-tools-call-timeout/SOURCE-mcp-tools-call-timeout.patch
+ create mode 100755 patches/syndicate/server/2026.1117.0/mcp-tools-call-timeout/live-check-mcp-tools-call-timeout.sh
+ create mode 100755 patches/syndicate/server/2026.1117.0/mcp-tools-call-timeout/standalone-mcp-gateway-check.mjs
+ create mode 100644 patches/syndicate/server/2026.1117.0/mcp-tools-call-timeout/test-mcp-tools-call-timeout.mjs
+ create mode 100644 patches/syndicate/server/2026.1117.0/question-answer-resume/PATCH-MANIFEST.txt
+ create mode 100644 patches/syndicate/server/2026.1117.0/question-answer-resume/SOURCE-question-answer-resume.patch
+ create mode 100644 patches/syndicate/server/2026.1117.0/task-session-keep-on-reassignment/PATCH-MANIFEST.txt
+ create mode 100644 patches/syndicate/server/2026.1117.0/task-session-keep-on-reassignment/SOURCE-task-session-keep-on-reassignment.patch
+ create mode 100644 patches/syndicate/server/2026.1117.0/task-session-keep-on-reassignment/session-preparation.js
+ create mode 100644 patches/syndicate/ui/2026.1117.0/PATCH-MANIFEST.txt
+ create mode 100644 patches/syndicate/ui/2026.1117.0/SOURCE-fallback-ui.patch
+ create mode 100644 patches/syndicate/ui/2026.1117.0/SOURCE-stage-decision-ui.patch
+
+diff --git a/patches/syndicate/README.md b/patches/syndicate/README.md
+new file mode 100644
+index 000000000..9416f06db
+--- /dev/null
++++ b/patches/syndicate/README.md
+@@ -0,0 +1,46 @@
++# Our patches
++
++The patches Syndicate runs on the deployed Paperclip build, kept here so that this
++fork carries them and they can be read, rebased and sent upstream.
++
++Base of this branch: tag `v2026.1117.0` — the version the live instance runs.
++
++## Applied on this branch (source level)
++
++| commit | patch | what it does |
++| --- | --- | --- |
++| `feat(ui): fallbackModel picker in the agent config form` | `ui/2026.1117.0/SOURCE-fallback-ui.patch` | the fallback model picker in the agent config form |
++| `feat(ui): execution stage-decision card in issue properties` | `ui/2026.1117.0/SOURCE-stage-decision-ui.patch` | the stage-decision card in issue properties |
++| `fix(server): name the exact secret key in the access-denied answer` | source twin of `server/2026.1117.0/SOURCE-secrets.patch` | the 403 body points at `GET /api/agents/me/secrets` |
++
++## Patch files for the published build
++
++`server/2026.1117.0/` and `adapter/2026.1117.0/` hold the patches the host applies to
++the **published npm output** of `@paperclipai/server` and `@paperclipai/adapter`
++(`dist/routes/**`, `dist/services/**`, `runtime-config.js`), not to this source tree.
++Every directory has its own `PATCH-MANIFEST.txt` with the semantics, the base version
++and the porting notes.
++
++| patch | what it does |
++| --- | --- |
++| `server/2026.1117.0/SOURCE-issue-scoped-run-lookup.patch` | a live run is resolved by issue identity, not by the assignee's newest run |
++| `server/2026.1117.0/SOURCE-routine-dispatch-conflict.patch` | a routine dispatch that loses the open-execution race is coalesced into the live execution issue |
++| `server/2026.1117.0/SOURCE-secrets.patch` | the secrets 403 hint (the source twin of the commit above) |
++| `server/2026.1117.0/in-review-handoff-stop/` | a task parked in `in_review` does not stop its own run |
++| `server/2026.1117.0/mcp-tools-call-timeout/` | an MCP `tools/call` forwards the caller's timeout instead of a hard 10 s cut |
++| `server/2026.1117.0/question-answer-resume/` | a human answer to `ask_user_questions` hands the task back to the agent |
++| `server/2026.1117.0/task-session-keep-on-reassignment/` | an OpenCode task session is kept on an `issue_assigned` wake |
++| `adapter/2026.1117.0/SOURCE-small-model-session.patch` | the OpenCode `small_model` defaults to the session model |
++
++## Not applied here
++
++`not-applied-here/` holds our source-level patches that were written against a
++different upstream state and do not apply to `v2026.1117.0` as they are:
++
++- `5c0e6a2f-...-issue-scoped-run-lookup.patch` — the source-level twin of the server
++  run-lookup patch, written against upstream master of 2026-11-12;
++  `server/src/services/issue-run-presence.ts` does not exist in the 2026.1117.0 tag.
++- `stuck-inprogress-recovery.patch` — the sweeper for issues stuck in `in_progress`
++  after an agent run dies.
++- `SOURCE-fallback.patch` — the adapter's fallback model retry, written against
++  2026.1106.0 (`packages/adapters/opencode-local/src/server/**`).
+diff --git a/patches/syndicate/adapter/2026.1117.0/PATCH-MANIFEST.txt b/patches/syndicate/adapter/2026.1117.0/PATCH-MANIFEST.txt
+new file mode 100644
+index 000000000..d809390bf
+--- /dev/null
++++ b/patches/syndicate/adapter/2026.1117.0/PATCH-MANIFEST.txt
+@@ -0,0 +1,85 @@
++small-model-session adapter patch — @paperclipai/adapter-opencode-local 2026.1117.0
++==============================================================================
++
++base_release       2026.1117.0
++base_dist          /root/.paperclip/cli/installs/npm/2026.1117.0/node_modules/@paperclipai/adapter-opencode-local/dist/server/runtime-config.js
++patched_files     dist/server/runtime-config.js
++issue              SYN-792
++
++What this fixes
++---------------
++OpenCode generates the session title with the auxiliary "small" model, not with
++the model that handles the session. The adapter only pinned that model through
++PAPERCLIP_OPENCODE_SMALL_MODEL, so on this instance every title-generation call
++went to a second provider ("Strata omega" / local/swift-1.5-iq3xxs) even when
++the task itself ran on guardrails-minimax/MiniMax-M3. With that provider down
++the title call failed and the session kept the default "New session - <ts>"
++title (opencode.db: 340 sessions, 290 title calls, all small=true providerID=local).
++
++Change
++------
++In prepareOpenCodeRuntimeConfig (runtime-config.js, after the existing
++PAPERCLIP_OPENCODE_SMALL_MODEL pin) the small model now defaults to the model
++that handles the session, i.e. the adapter's own config.model:
++
++    else if (configuredModel) {
++        nextConfig.small_model = `${configuredModel.provider}/${configuredModel.model}`;
++        notes.push(`Set OpenCode small_model to the session model ${nextConfig.small_model}.`);
++    }
++
++`configuredModel` is the already-parsed config.model (parseConfiguredModelRef),
++the same value the adapter passes to OpenCode as `--model`. An explicit
++PAPERCLIP_OPENCODE_SMALL_MODEL still wins, so an operator can still pin a
++different auxiliary model. When no model is configured the copied global
++config's small_model is left untouched.
++
++This mirrors what the Paperclip runner drivers already do
++(server/dist/vendor/paperclip-runner/.../opencode-server-driver.js:
++`small_model: input.options.model`).
++
++Deployment note
++---------------
++PAPERCLIP_OPENCODE_SMALL_MODEL=local/swift-1.5-iq3xxs in
++/etc/systemd/system/paperclip.service pins the auxiliary model globally and
++takes precedence over this default. The unit line was removed as part of the
++same change (SYN-792); without that removal the patch is inert.
++
++marker           Set OpenCode small_model to the session model
++upstream         not fixed upstream at v2026.1117.0 (checked 2026-11-23)
++verification     (1) node --check runtime-config.js -> OK
++                 (2) patch -p1 --batch applies cleanly to a pristine
++                     2026.1117.0 dist copy and reproduces this artifact
++                     byte-for-byte
++                 (3) focused check: prepareOpenCodeRuntimeConfig() with
++                     config.model=guardrails-minimax/MiniMax-M3 and no
++                     PAPERCLIP_OPENCODE_SMALL_MODEL writes
++                     small_model=guardrails-minimax/MiniMax-M3; with the env
++                     var set it writes the pinned value instead
++reapply          /usr/local/bin/paperclip-adapter-small-model-session-patch.sh
++                 (no-op when the marker is present; refuses to act on a version
++                 with no stored build). Wired as ExecStartPre of paperclip.service.
++backup           /var/backups/paperclip-adapter-pre-small-model-session/
++built_at         2026-11-23T06:10:00Z
++verified_at      2026-11-23T06:12:00Z
++
++ENV-pin guard — SYN-827 F-2 (added 2026-11-23)
++-----------------------------------------------
++The "small_model = session model" default is INERT as long as an uncommented
++Environment=PAPERCLIP_OPENCODE_SMALL_MODEL= line lives in /etc/systemd/system/paperclip.service,
++because the operator pin takes precedence over the new default. If that line ever comes back by a manual fix, a unit restore from backup, or some upgrade, patch A silently reverts to title-gen on the global swift/Strata model and nothing in the dist shows it. The reapply script therefore now asserts this combination: when the marker below is active AND such an uncommented Environment= pin line is present in the effective unit, it prints an explicit WARNING ("pin present in unit while session-model default is enabled -> patch A effect is overridden by operator pin") and logs the fact; exit code stays 0 in every branch (never fatal, never blocks paperclip.service). Comment-only mentions of the variable are ignored (awk filter), so today's prod unit — which only documents the var in a comment — produces no warning noise.
++
++post-restart self-check (run after EVERY paperclip.service restart; all commands are read-only):
++    UNIT=/etc/systemd/system/paperclip.service
++    ADAPT=$(readlink -f /root/.paperclip/cli/current/node_modules/@paperclipai/adapter-opencode-local)/dist/server/runtime-config.js
++    SRV=$(readlink -f /root/.paperclip/cli/current/node_modules/@paperclipai/server)/dist/services/heartbeat/session-preparation.js
++    awk '/^[[:space:]]*#/{next} /^[[:space:]]*Environment=/ && /PAPERCLIP_OPENCODE_SMALL_MODEL=/{print}' "$UNIT" \
++        | grep -q . && echo "PIN PRESENT -> patch A effect overridden by operator pin" || echo "no active operator pin — good"
++    grep -qF 'Set OpenCode small_model to the session model' "$ADAPT" && echo "adapter marker OK" || echo "adapter marker MISSING"
++    grep -qF 'A human reply on a task parked in review hands the task back to the agent' "$SRV" && echo "server marker OK" || echo "server marker MISSING"
++Expected green state after each restart: first check reports NO active pin, both markers report OK. Any other result means the live dist drifted from these artifacts or an operator pin has returned — investigate before trusting title-gen behaviour.
++
++sha256 (must match files on disk; regenerate with sha256sum after any sanctioned change)
++reapply_script_sha256=87b09171f8b581df31380fab4713c6eff003ec7955b7a7cd5ee1132ea11d7745
++dist_artifact_sha256=5f186c0b64a7f64ee28e1b2f45d157ceea96fcc1fe79d4ad17ad441b55eacea4
++source_patch_sha256=43d1d1ad27413af21ac2174835a0c4ee796a3ba5dd67a745d76240882cf75a35
++updated_at       2026-11-23T22:58:04Z SYN-827 F-2 ENV-pin guard + post-restart self-check added; SOURCE/dist untouched, byte-reproducibility chain re-verified pristine->SOURCE==artifact==live with node --check clean. Rollback of this manifest edit only: restore /var/backups/syn827-pre-env-pin-guard/<ts>/adapter-PATCH-MANIFEST.txt. Script rollback path unchanged: snapshot per apply under /var/backups/paperclip-adapter-pre-small-model-session/ plus this pre-edit backup copy.
+diff --git a/patches/syndicate/adapter/2026.1117.0/SOURCE-small-model-session.patch b/patches/syndicate/adapter/2026.1117.0/SOURCE-small-model-session.patch
+new file mode 100644
+index 000000000..5d67b0eaf
+--- /dev/null
++++ b/patches/syndicate/adapter/2026.1117.0/SOURCE-small-model-session.patch
+@@ -0,0 +1,17 @@
++--- a/runtime-config.js
+++++ b/runtime-config.js
++@@ -194,6 +194,14 @@
++         nextConfig.small_model = smallModel;
++         notes.push(`Pinned OpenCode small_model to ${smallModel}.`);
++     }
+++    else if (configuredModel) {
+++        // Without an operator pin, use the model that handles the session: OpenCode
+++        // generates the session title with small_model, so a second provider there
+++        // costs a request the task never asked for and fails outright when that
+++        // provider is down.
+++        nextConfig.small_model = `${configuredModel.provider}/${configuredModel.model}`;
+++        notes.push(`Set OpenCode small_model to the session model ${nextConfig.small_model}.`);
+++    }
++     await fs.writeFile(runtimeConfigPath, `${JSON.stringify(nextConfig, null, 2)}\n`, "utf8");
++     if (input.sandboxToolOomPreference) {
++         try {
+diff --git a/patches/syndicate/not-applied-here/5c0e6a2f-a323-45b5-b15c-a9844929e1f5-issue-scoped-run-lookup.patch b/patches/syndicate/not-applied-here/5c0e6a2f-a323-45b5-b15c-a9844929e1f5-issue-scoped-run-lookup.patch
+new file mode 100644
+index 000000000..6f7776439
+--- /dev/null
++++ b/patches/syndicate/not-applied-here/5c0e6a2f-a323-45b5-b15c-a9844929e1f5-issue-scoped-run-lookup.patch
+@@ -0,0 +1,497 @@
++From 12079492515d4fa2ed9384077eda065d16b955f4 Mon Sep 17 00:00:00 2001
++From: cioinside <cioinside@users.noreply.github.com>
++Date: Thu, 12 Nov 2026 10:10:07 +0300
++Subject: [PATCH] fix(server): resolve an issue's live run by issue identity,
++ not by agent
++
++The active-run lookup fell back to the agent's newest running run and
++compared its issue id with the requested one. An agent that works on
++several issues at once owns several live runs, so the fallback always
++answered with a foreign run and the issue looked run-less. A board
++comment with interrupt:true did not interrupt the run, a reassignment
++passed while the old run kept working, and terminalising the issue did
++not stop its run.
++
++Resolve the run by issue identity instead: issue_id, native_issue_id or
++context_snapshot->>'issueId', company scoped, with a running run ordered
++ahead of a newer queued one. The lookup no longer needs an assignee,
++because a run belongs to its issue, not to the currently assigned agent.
++---
++ .../__tests__/agent-live-run-routes.test.ts   | 53 ++++++++++++---
++ .../issue-activity-events-routes.test.ts      |  1 +
++ ...ue-agent-mutation-ownership-routes.test.ts |  3 +-
++ ...issue-assignee-invokability-routes.test.ts |  1 +
++ .../issue-closed-workspace-routes.test.ts     |  1 +
++ .../issue-comment-cancel-routes.test.ts       |  1 +
++ .../issue-comment-reopen-routes.test.ts       |  1 +
++ .../issue-execution-policy-routes.test.ts     |  1 +
++ ...issue-update-comment-wakeup-routes.test.ts | 67 +++++++++++++++++++
++ .../issue-workspace-command-authz.test.ts     |  1 +
++ server/src/routes/issues.ts                   | 32 +++------
++ server/src/services/heartbeat.ts              |  2 +
++ server/src/services/heartbeat/run-state.ts    | 32 +++++++++
++ server/src/services/issue-run-presence.ts     | 18 ++---
++ 14 files changed, 172 insertions(+), 42 deletions(-)
++
++diff --git a/server/src/__tests__/agent-live-run-routes.test.ts b/server/src/__tests__/agent-live-run-routes.test.ts
++index bf511eb18..5d92188b2 100644
++--- a/server/src/__tests__/agent-live-run-routes.test.ts
+++++ b/server/src/__tests__/agent-live-run-routes.test.ts
++@@ -13,6 +13,7 @@ const mockHeartbeatService = vi.hoisted(() => ({
++   buildRunOutputSilence: vi.fn(),
++   decorateActiveRunStatus: vi.fn(),
++   getRunIssueSummary: vi.fn(),
+++  getLiveRunForIssue: vi.fn(),
++   getActiveRunIssueSummaryForAgent: vi.fn(),
++   getRunReadAccess: vi.fn(),
++   getRunLogAccess: vi.fn(),
++@@ -355,9 +356,7 @@ describe("agent live run routes", () => {
++       agentId: "agent-1",
++       issueId: "issue-1",
++     });
++-    mockHeartbeatService.getActiveRunIssueSummaryForAgent.mockResolvedValue(
++-      null,
++-    );
+++    mockHeartbeatService.getLiveRunForIssue.mockResolvedValue(null);
++     mockHeartbeatService.buildRunOutputSilence.mockResolvedValue(null);
++     mockHeartbeatService.getRunReadAccess.mockResolvedValue({
++       id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
++@@ -543,7 +542,7 @@ describe("agent live run routes", () => {
++     expect(res.body).not.toHaveProperty("logRef");
++   });
++ 
++-  it("ignores a stale execution run from another issue and falls back to the assignee's matching run", async () => {
+++  it("ignores a stale execution run from another issue and falls back to this issue's live run", async () => {
++     mockHeartbeatService.getRunIssueSummary.mockResolvedValue({
++       id: "run-foreign",
++       status: "running",
++@@ -555,7 +554,7 @@ describe("agent live run routes", () => {
++       agentId: "agent-1",
++       issueId: "issue-2",
++     });
++-    mockHeartbeatService.getActiveRunIssueSummaryForAgent.mockResolvedValue({
+++    mockHeartbeatService.getLiveRunForIssue.mockResolvedValue({
++       id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
++       status: "running",
++       invocationSource: "on_demand",
++@@ -575,9 +574,10 @@ describe("agent live run routes", () => {
++     expect(mockHeartbeatService.getRunIssueSummary).toHaveBeenCalledWith(
++       "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
++     );
++-    expect(
++-      mockHeartbeatService.getActiveRunIssueSummaryForAgent,
++-    ).toHaveBeenCalledWith("agent-1");
+++    expect(mockHeartbeatService.getLiveRunForIssue).toHaveBeenCalledWith(
+++      "company-1",
+++      "issue-1",
+++    );
++     expect(res.body).toMatchObject({
++       id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
++       issueId: "issue-1",
++@@ -587,6 +587,43 @@ describe("agent live run routes", () => {
++     });
++   });
++ 
+++  it("keeps this issue's live run visible when the agent's newest run belongs to another issue", async () => {
+++    mockIssueService.getByIdentifier.mockResolvedValue({
+++      id: "issue-1",
+++      companyId: "company-1",
+++      executionRunId: null,
+++      assigneeAgentId: "agent-1",
+++      status: "in_progress",
+++    });
+++    mockHeartbeatService.getRunIssueSummary.mockResolvedValue(null);
+++    mockHeartbeatService.getLiveRunForIssue.mockResolvedValue({
+++      id: "run-issue-1",
+++      status: "running",
+++      invocationSource: "on_demand",
+++      triggerDetail: "manual",
+++      startedAt: new Date("2026-04-10T09:30:00.000Z"),
+++      finishedAt: null,
+++      createdAt: new Date("2026-04-10T09:29:59.000Z"),
+++      agentId: "agent-1",
+++      issueId: "issue-1",
+++    });
+++
+++    const res = await requestApp(await createApp(), (baseUrl) =>
+++      request(baseUrl).get("/api/issues/PC1A2-1295/active-run"),
+++    );
+++
+++    expect(res.status, JSON.stringify(res.body)).toBe(200);
+++    expect(mockHeartbeatService.getLiveRunForIssue).toHaveBeenCalledWith(
+++      "company-1",
+++      "issue-1",
+++    );
+++    expect(res.body).toMatchObject({
+++      id: "run-issue-1",
+++      issueId: "issue-1",
+++      agentId: "agent-1",
+++    });
+++  });
+++
++   it("includes ephemeral current status fields on active run polling", async () => {
++     mockHeartbeatService.decorateActiveRunStatus.mockImplementation((run) => ({
++       ...run,
++diff --git a/server/src/__tests__/issue-activity-events-routes.test.ts b/server/src/__tests__/issue-activity-events-routes.test.ts
++index 1fc4088c9..ee0786e7f 100644
++--- a/server/src/__tests__/issue-activity-events-routes.test.ts
+++++ b/server/src/__tests__/issue-activity-events-routes.test.ts
++@@ -36,6 +36,7 @@ const mockHeartbeatService = vi.hoisted(() => ({
++   reportRunActivity: vi.fn(async () => undefined),
++   getRun: vi.fn(async () => null),
++   getActiveRunForAgent: vi.fn(async () => null),
+++  getLiveRunForIssue: vi.fn(async () => null),
++   cancelRun: vi.fn(async () => null),
++ }));
++ const mockFeedbackService = vi.hoisted(() => ({
++diff --git a/server/src/__tests__/issue-agent-mutation-ownership-routes.test.ts b/server/src/__tests__/issue-agent-mutation-ownership-routes.test.ts
++index d31598d25..150606a1f 100644
++--- a/server/src/__tests__/issue-agent-mutation-ownership-routes.test.ts
+++++ b/server/src/__tests__/issue-agent-mutation-ownership-routes.test.ts
++@@ -125,6 +125,7 @@ const mockHeartbeatService = vi.hoisted(() => ({
++   reportRunActivity: vi.fn(async () => undefined),
++   getRun: vi.fn(async (): Promise<unknown> => null),
++   getActiveRunForAgent: vi.fn(async (): Promise<unknown> => null),
+++  getLiveRunForIssue: vi.fn(async (): Promise<unknown> => null),
++   cancelRun: vi.fn(async (): Promise<unknown> => null),
++   resumeTaskRetry: vi.fn(async () => undefined),
++ }));
++@@ -2985,7 +2986,7 @@ describe("agent issue mutation checkout ownership", () => {
++ 
++     it("recognizes the caller when the active run is resolved without an issue execution lock", async () => {
++       mockIssueService.getById.mockResolvedValue(makeIssue({ status: "in_review" }));
++-      mockHeartbeatService.getActiveRunForAgent.mockResolvedValue(runningRun);
+++      mockHeartbeatService.getLiveRunForIssue.mockResolvedValue(runningRun);
++       const res = await request(handoffApp({ ...ownerActor(), source: "agent_jwt" }))
++         .patch(`/api/issues/${issueId}`).send(handoff);
++       expect(res.status, JSON.stringify(res.body)).toBe(200);
++diff --git a/server/src/__tests__/issue-assignee-invokability-routes.test.ts b/server/src/__tests__/issue-assignee-invokability-routes.test.ts
++index 45f0b2e88..c9dd46a8f 100644
++--- a/server/src/__tests__/issue-assignee-invokability-routes.test.ts
+++++ b/server/src/__tests__/issue-assignee-invokability-routes.test.ts
++@@ -38,6 +38,7 @@ const mockHeartbeatService = vi.hoisted(() => ({
++   reportRunActivity: vi.fn(async () => undefined),
++   getRun: vi.fn(async () => null),
++   getActiveRunForAgent: vi.fn(async () => null),
+++  getLiveRunForIssue: vi.fn(async () => null),
++   cancelRun: vi.fn(async () => null),
++ }));
++ 
++diff --git a/server/src/__tests__/issue-closed-workspace-routes.test.ts b/server/src/__tests__/issue-closed-workspace-routes.test.ts
++index 9d109d1a6..b75148356 100644
++--- a/server/src/__tests__/issue-closed-workspace-routes.test.ts
+++++ b/server/src/__tests__/issue-closed-workspace-routes.test.ts
++@@ -44,6 +44,7 @@ const mockHeartbeatService = vi.hoisted(() => ({
++   reportRunActivity: vi.fn(async () => undefined),
++   getRun: vi.fn(async () => null),
++   getActiveRunForAgent: vi.fn(async () => null),
+++  getLiveRunForIssue: vi.fn(async () => null),
++   cancelRun: vi.fn(async () => null),
++ }));
++ 
++diff --git a/server/src/__tests__/issue-comment-cancel-routes.test.ts b/server/src/__tests__/issue-comment-cancel-routes.test.ts
++index 410f697e7..a394d881b 100644
++--- a/server/src/__tests__/issue-comment-cancel-routes.test.ts
+++++ b/server/src/__tests__/issue-comment-cancel-routes.test.ts
++@@ -23,6 +23,7 @@ const mockAccessService = vi.hoisted(() => ({
++ const mockHeartbeatService = vi.hoisted(() => ({
++   getRun: vi.fn(async (): Promise<unknown> => null),
++   getActiveRunForAgent: vi.fn(async () => null),
+++  getLiveRunForIssue: vi.fn(async () => null),
++ }));
++ const mockAuthoritativeQueueWakes = vi.hoisted(() => [] as Array<Record<string, unknown>>);
++ 
++diff --git a/server/src/__tests__/issue-comment-reopen-routes.test.ts b/server/src/__tests__/issue-comment-reopen-routes.test.ts
++index 1ade5a31d..fe12b392d 100644
++--- a/server/src/__tests__/issue-comment-reopen-routes.test.ts
+++++ b/server/src/__tests__/issue-comment-reopen-routes.test.ts
++@@ -40,6 +40,7 @@ const mockHeartbeatService = vi.hoisted(() => ({
++   reportRunActivity: vi.fn(async () => undefined),
++   getRun: vi.fn(async (): Promise<unknown> => null),
++   getActiveRunForAgent: vi.fn(async () => null),
+++  getLiveRunForIssue: vi.fn(async () => null),
++   cancelRun: vi.fn(async (): Promise<unknown> => null),
++ }));
++ 
++diff --git a/server/src/__tests__/issue-execution-policy-routes.test.ts b/server/src/__tests__/issue-execution-policy-routes.test.ts
++index 8fffd3761..cad3b7b92 100644
++--- a/server/src/__tests__/issue-execution-policy-routes.test.ts
+++++ b/server/src/__tests__/issue-execution-policy-routes.test.ts
++@@ -25,6 +25,7 @@ const mockHeartbeatService = vi.hoisted(() => ({
++   reportRunActivity: vi.fn(async () => undefined),
++   getRun: vi.fn(async () => null),
++   getActiveRunForAgent: vi.fn(async () => null),
+++  getLiveRunForIssue: vi.fn(async () => null),
++   cancelRun: vi.fn(async () => null),
++ }));
++ 
++diff --git a/server/src/__tests__/issue-update-comment-wakeup-routes.test.ts b/server/src/__tests__/issue-update-comment-wakeup-routes.test.ts
++index 2477493f8..9f6c02cc6 100644
++--- a/server/src/__tests__/issue-update-comment-wakeup-routes.test.ts
+++++ b/server/src/__tests__/issue-update-comment-wakeup-routes.test.ts
++@@ -47,6 +47,7 @@ const mockHeartbeatService = vi.hoisted(() => ({
++   reportRunActivity: vi.fn(async () => undefined),
++   getRun: vi.fn(async (_runId: string): Promise<Record<string, unknown> | null> => null),
++   getActiveRunForAgent: vi.fn(async () => null),
+++  getLiveRunForIssue: vi.fn(async () => null),
++   cancelRun: vi.fn(async (
++     _runId: string,
++     _reason: string,
++@@ -300,6 +301,8 @@ describe("issue update comment wakeups", () => {
++     mockIssueService.getWakeableParentAfterChildCompletion.mockResolvedValue(null);
++     mockIssueService.getCurrentScheduledRetry.mockResolvedValue(null);
++     mockIssueService.listReviewAttention.mockResolvedValue(new Map());
+++    mockHeartbeatService.getRun.mockResolvedValue(null);
+++    mockHeartbeatService.getLiveRunForIssue.mockResolvedValue(null);
++   });
++ 
++   it.each(["post", "patch"] as const)("rejects %s board messages under an inherited pause before any mutation", async (method) => {
++@@ -535,6 +538,70 @@ describe("issue update comment wakeups", () => {
++     expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
++   });
++ 
+++  it("interrupts the issue's live run when the agent's newest run belongs to another issue", async () => {
+++    const existing = makeIssue({
+++      assigneeAgentId: PREVIOUS_AGENT_ID,
+++      assigneeUserId: null,
+++      executionRunId: null,
+++      status: "in_progress",
+++    });
+++    mockIssueService.getById.mockResolvedValue(existing);
+++    mockIssueService.update.mockResolvedValue(existing);
+++    mockIssueService.addComment.mockResolvedValue({
+++      id: "comment-interrupt-issue-run",
+++      issueId: existing.id,
+++      companyId: existing.companyId,
+++      body: "stop the run of this issue",
+++    });
+++    // The agent works on several issues at once: its newest run belongs to
+++    // another issue, so the agent-scoped lookup cannot find this issue's run.
+++    mockHeartbeatService.getActiveRunForAgent.mockResolvedValue({
+++      id: "run-other-issue",
+++      companyId: existing.companyId,
+++      agentId: PREVIOUS_AGENT_ID,
+++      status: "running",
+++      contextSnapshot: { issueId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" },
+++    });
+++    mockHeartbeatService.getLiveRunForIssue.mockResolvedValue({
+++      id: "run-issue",
+++      status: "running",
+++      agentId: PREVIOUS_AGENT_ID,
+++      issueId: existing.id,
+++    });
+++    mockHeartbeatService.getRun.mockImplementation(async (runId: string) =>
+++      runId === "run-issue"
+++        ? {
+++            id: "run-issue",
+++            companyId: existing.companyId,
+++            agentId: PREVIOUS_AGENT_ID,
+++            status: "running",
+++            contextSnapshot: { issueId: existing.id },
+++          }
+++        : null,
+++    );
+++    mockHeartbeatService.cancelRun.mockResolvedValue({
+++      id: "run-issue",
+++      companyId: existing.companyId,
+++      agentId: PREVIOUS_AGENT_ID,
+++      status: "cancelled",
+++    });
+++
+++    const res = await request(await createApp())
+++      .patch(`/api/issues/${existing.id}`)
+++      .send({ comment: "stop the run of this issue", interrupt: true });
+++
+++    expect(res.status).toBe(200);
+++    expect(mockHeartbeatService.getLiveRunForIssue).toHaveBeenCalledWith(
+++      existing.companyId,
+++      existing.id,
+++    );
+++    expect(mockHeartbeatService.cancelRun).toHaveBeenCalledWith(
+++      "run-issue",
+++      "Interrupted by board comment",
+++      expect.objectContaining({ errorCode: "operator_interrupted" }),
+++    );
+++  });
+++
++   it("interrupts the active run and wakes the newly assigned agent with handoff context", async () => {
++     const existing = makeIssue({
++       assigneeAgentId: PREVIOUS_AGENT_ID,
++diff --git a/server/src/__tests__/issue-workspace-command-authz.test.ts b/server/src/__tests__/issue-workspace-command-authz.test.ts
++index 7772649c0..94e829174 100644
++--- a/server/src/__tests__/issue-workspace-command-authz.test.ts
+++++ b/server/src/__tests__/issue-workspace-command-authz.test.ts
++@@ -40,6 +40,7 @@ const mockHeartbeatService = vi.hoisted(() => ({
++   reportRunActivity: vi.fn(),
++   getRun: vi.fn(),
++   getActiveRunForAgent: vi.fn(),
+++  getLiveRunForIssue: vi.fn(),
++   cancelRun: vi.fn(),
++ }));
++ 
++diff --git a/server/src/routes/issues.ts b/server/src/routes/issues.ts
++index ce82b6809..e8b67266a 100644
++--- a/server/src/routes/issues.ts
+++++ b/server/src/routes/issues.ts
++@@ -7628,6 +7628,7 @@ export function issueRoutes(
++ 
++   async function resolveActiveIssueRun(issue: {
++     id: string;
+++    companyId: string;
++     assigneeAgentId: string | null;
++     executionRunId?: string | null;
++   }, options?: { queueStateOnly: true }) {
++@@ -7637,28 +7638,15 @@ export function issueRoutes(
++         : await heartbeat.getRun(issue.executionRunId)
++       : null;
++ 
++-    if (
++-      (!runToInterrupt || runToInterrupt.status !== "running") &&
++-      issue.assigneeAgentId
++-    ) {
++-      const activeRun = options?.queueStateOnly
++-        ? await heartbeat.getActiveRunIssueControlForAgent(issue.assigneeAgentId)
++-        : await heartbeat.getActiveRunForAgent(issue.assigneeAgentId);
++-      const activeIssueId =
++-        activeRun &&
++-        activeRun.contextSnapshot &&
++-        typeof activeRun.contextSnapshot === "object" &&
++-        typeof (activeRun.contextSnapshot as Record<string, unknown>)
++-          .issueId === "string"
++-          ? ((activeRun.contextSnapshot as Record<string, unknown>)
++-              .issueId as string)
++-          : null;
++-      if (
++-        activeRun &&
++-        activeRun.status === "running" &&
++-        activeIssueId === issue.id
++-      ) {
++-        runToInterrupt = activeRun;
+++    if (!runToInterrupt || runToInterrupt.status !== "running") {
+++      // Look the run up by issue identity: the agent-scoped lookup answers with
+++      // the agent's newest run, which belongs to another issue whenever the
+++      // agent works on several issues at once and hides this issue's run.
+++      const liveRun = await heartbeat.getLiveRunForIssue(issue.companyId, issue.id);
+++      if (liveRun?.status === "running") {
+++        runToInterrupt = options?.queueStateOnly
+++          ? await heartbeat.getRunIssueControl(liveRun.id)
+++          : await heartbeat.getRun(liveRun.id);
++       }
++     }
++ 
++diff --git a/server/src/services/heartbeat.ts b/server/src/services/heartbeat.ts
++index 6bfc03289..20606a58f 100644
++--- a/server/src/services/heartbeat.ts
+++++ b/server/src/services/heartbeat.ts
++@@ -899,6 +899,7 @@ export function heartbeatService(
++     getRunIssueControl,
++     getActiveRunIssueControlForAgent,
++     getActiveRunForAgent,
+++    getLiveRunForIssue,
++     getActiveRunIssueSummaryForAgent,
++   } = createHeartbeatRunState(db);
++   const {
++@@ -4687,6 +4688,7 @@ export function heartbeatService(
++     getActiveRunIssueControlForAgent,
++ 
++     getActiveRunForAgent,
+++    getLiveRunForIssue,
++ 
++     getActiveRunIssueSummaryForAgent,
++   };
++diff --git a/server/src/services/heartbeat/run-state.ts b/server/src/services/heartbeat/run-state.ts
++index 9a0d3c04f..bf3f864f2 100644
++--- a/server/src/services/heartbeat/run-state.ts
+++++ b/server/src/services/heartbeat/run-state.ts
++@@ -13,6 +13,7 @@ import {
++   eq,
++   getTableColumns,
++   gt,
+++  inArray,
++   or,
++   sql,
++ } from "drizzle-orm";
++@@ -2057,6 +2058,37 @@ export function createHeartbeatRunState(db: Db) {
++       return run ?? null;
++     },
++ 
+++    /**
+++     * The live run of an issue, resolved by the run's issue identity instead of
+++     * by its agent: an agent running several issues at once owns several live
+++     * runs, and the agent-scoped lookup answers with the newest one, which
+++     * belongs to a foreign issue.
+++     */
+++    getLiveRunForIssue: async (companyId: string, issueId: string) => {
+++      const [run] = await db
+++        .select(heartbeatRunIssueSummaryColumns)
+++        .from(heartbeatRuns)
+++        .where(
+++          and(
+++            eq(heartbeatRuns.companyId, companyId),
+++            inArray(heartbeatRuns.status, ["queued", "running"]),
+++            or(
+++              eq(heartbeatRuns.issueId, issueId),
+++              eq(heartbeatRuns.nativeIssueId, issueId),
+++              sql`${heartbeatRuns.contextSnapshot}->>'issueId' = ${issueId}`,
+++            ),
+++          ),
+++        )
+++        // A running run wins over a newer queued one: the running run is the
+++        // one the issue actually executes, and the one callers interrupt.
+++        .orderBy(
+++          sql`case when ${heartbeatRuns.status} = 'running' then 0 else 1 end`,
+++          desc(heartbeatRuns.startedAt),
+++        )
+++        .limit(1);
+++      return run ?? null;
+++    },
+++
++     getActiveRunIssueSummaryForAgent: async (agentId: string) => {
++       const [run] = await db
++         .select(heartbeatRunIssueSummaryColumns)
++diff --git a/server/src/services/issue-run-presence.ts b/server/src/services/issue-run-presence.ts
++index c1817762b..070ca9897 100644
++--- a/server/src/services/issue-run-presence.ts
+++++ b/server/src/services/issue-run-presence.ts
++@@ -7,7 +7,7 @@ import type { agentService } from "./agents.js";
++ 
++ type HeartbeatReads = Pick<
++   ReturnType<typeof heartbeatService>,
++-  "decorateActiveRunStatus" | "buildRunOutputSilence" | "getRunIssueSummary" | "getActiveRunIssueSummaryForAgent"
+++  "decorateActiveRunStatus" | "buildRunOutputSilence" | "getRunIssueSummary" | "getLiveRunForIssue"
++ >;
++ 
++ export interface IssueRunPresenceIssue {
++@@ -18,12 +18,6 @@ export interface IssueRunPresenceIssue {
++   executionRunId?: string | null;
++ }
++ 
++-function asNonEmptyString(value: unknown): string | null {
++-  if (typeof value !== "string") return null;
++-  const trimmed = value.trim();
++-  return trimmed.length > 0 ? trimmed : null;
++-}
++-
++ /**
++  * The run presence a task shows in its chat: queued/running runs and the active
++  * run. Callers own resolving the task and authorizing the read; these builders
++@@ -103,10 +97,12 @@ export function issueRunPresenceService(
++       run = null;
++     }
++ 
++-    if (!run && issue.assigneeAgentId && issue.status === "in_progress") {
++-      const candidateRun = await heartbeat.getActiveRunIssueSummaryForAgent(issue.assigneeAgentId);
++-      const candidateIssueId = asNonEmptyString(candidateRun?.issueId);
++-      if (candidateRun && candidateIssueId === issue.id) {
+++    if (!run && issue.status === "in_progress") {
+++      // Resolve the run by issue identity: the agent-scoped lookup answers
+++      // with the agent's newest run, which belongs to another issue whenever
+++      // the agent works on several issues at once and hides this issue's run.
+++      const candidateRun = await heartbeat.getLiveRunForIssue(issue.companyId, issue.id);
+++      if (candidateRun) {
++         run = candidateRun;
++       }
++     }
++-- 
++2.51.0
++
+diff --git a/patches/syndicate/not-applied-here/SOURCE-fallback.patch b/patches/syndicate/not-applied-here/SOURCE-fallback.patch
+new file mode 100644
+index 000000000..96461fe4a
+--- /dev/null
++++ b/patches/syndicate/not-applied-here/SOURCE-fallback.patch
+@@ -0,0 +1,213 @@
++commit ad306e030dabf924a55148723edb65381b3e9446
++Author: cioinside <cioinside@users.noreply.github.com>
++Date:   Wed Nov 11 12:26:53 2026 +0300
++
++    feat(opencode-local): fallback model on provider token/quota limit
++    
++    When a run fails with a provider-side token/quota exhaustion error
++    (e.g. MiniMax coding-plan 429), retry once on the configured
++    adapterConfig.fallbackModel (provider/model) in a fresh session and
++    attribute the result to the model actually used. The detector only
++    reads error channels (stderr + type=error events), so task content
++    mentioning limits cannot trigger a false fallback. Invalid
++    fallbackModel formats are ignored with a logged warning.
++    
++    Also: opencode v2 has no --variant flag, so the variant now rides on
++    the model ref as provider/model#variant (pre-existing uncommitted fix
++    in the same hunk).
++    
++    UI: AgentConfigForm gains an optional 'Fallback model' dropdown for
++    opencode_local agents (ModelDropdown label/hint props), plus help text.
++
++diff --git a/packages/adapters/opencode-local/src/server/execute.ts b/packages/adapters/opencode-local/src/server/execute.ts
++index 6a1f0dc1c..a37383120 100644
++--- a/packages/adapters/opencode-local/src/server/execute.ts
+++++ b/packages/adapters/opencode-local/src/server/execute.ts
++@@ -52,7 +52,12 @@ import {
++   readPaperclipIssueWorkModeFromContext,
++   resolveLegacyPaperclipDesiredSkillNames,
++ } from "@paperclipai/adapter-utils/server-utils";
++-import { isOpenCodeUnknownSessionError, parseOpenCodeJsonl } from "./parse.js";
+++import {
+++  isOpenCodeProviderLimitError,
+++  isOpenCodeUnknownSessionError,
+++  parseOpenCodeJsonl,
+++} from "./parse.js";
+++import { isValidOpenCodeModelId } from "../index.js";
++ import {
++   ensureOpenCodeModelConfiguredAndAvailable,
++   isTruthyEnvFlag,
++@@ -240,6 +245,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
++   const command = asString(config.command, "opencode");
++   const model = asString(config.model, "").trim();
++   const variant = asString(config.variant, "").trim();
+++  let fallbackModel = asString(config.fallbackModel, "").trim();
+++  if (fallbackModel && !isValidOpenCodeModelId(fallbackModel)) {
+++    await onLog(
+++      "stderr",
+++      `[paperclip] Ignoring fallbackModel "${fallbackModel}": OpenCode models must use provider/model format.\n`,
+++    );
+++    fallbackModel = "";
+++  }
++ 
++   const workspaceContext = parseObject(context.paperclipWorkspace);
++   const workspaceCwd = asString(workspaceContext.cwd, "");
++@@ -613,24 +626,27 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
++     const printLogs = isTruthyEnvFlag(
++       env.PAPERCLIP_OPENCODE_PRINT_LOGS ?? process.env.PAPERCLIP_OPENCODE_PRINT_LOGS,
++     );
++-    const buildArgs = (resumeSessionId: string | null) => {
+++    const buildArgs = (resumeSessionId: string | null, modelOverride?: string) => {
++       const args = ["run", "--format", "json"];
++       if (printLogs) args.push("--print-logs");
++       if (resumeSessionId) args.push("--session", resumeSessionId);
++-      if (model) args.push("--model", model);
++-      if (variant) args.push("--variant", variant);
+++      // opencode v2 has no --variant flag; variant rides on the model as provider/model#variant.
+++      // A fallback model is always used bare: the variant belongs to the primary model.
+++      const effectiveModel = modelOverride ?? model;
+++      if (effectiveModel) args.push("--model", !modelOverride && variant ? `${model}#${variant}` : effectiveModel);
+++      else if (variant) args.push("--variant", variant);
++       if (extraArgs.length > 0) args.push(...extraArgs);
++       return args;
++     };
++ 
++-    const runAttempt = async (resumeSessionId: string | null) => {
+++    const runAttempt = async (resumeSessionId: string | null, modelOverride?: string) => {
++       await hydrateFreshSessionHandoff(ctx, { resumedSession: Boolean(resumeSessionId) });
++       const { basePrompt, promptMetrics } = buildPrompt(Boolean(resumeSessionId));
++       const prompt = joinPromptSections([
++         selectInitialCommunicationGuidance(context, { resumedSession: Boolean(resumeSessionId) }),
++         basePrompt,
++       ]);
++-      const args = buildArgs(resumeSessionId);
+++      const args = buildArgs(resumeSessionId, modelOverride);
++       if (onMeta) {
++         await onMeta({
++           adapterType: "opencode_local",
++@@ -672,6 +688,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
++         parsed: ReturnType<typeof parseOpenCodeJsonl>;
++       },
++       clearSessionOnMissingSession = false,
+++      modelUsed?: string,
++     ): AdapterExecutionResult => {
++       if (attempt.proc.timedOut) {
++         return {
++@@ -709,7 +726,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
++         parsedError ||
++         stderrLine ||
++         `OpenCode exited with code ${synthesizedExitCode ?? -1}`;
++-      const modelId = model || null;
+++      const modelId = (modelUsed ?? model) || null;
++ 
++       return {
++         exitCode: synthesizedExitCode,
++@@ -759,6 +776,55 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
++         return toResult(retry, true);
++       }
++ 
+++      // Provider token/quota exhaustion (e.g. MiniMax coding-plan limit): the
+++      // primary provider cannot serve the request right now, so retrying the
+++      // same model is futile. If a fallback model is configured, run once more
+++      // on a fresh session with that model instead of surfacing the failure.
+++      if (
+++        initialFailed &&
+++        fallbackModel &&
+++        isOpenCodeProviderLimitError(
+++          initial.proc.stdout,
+++          initial.rawStderr,
+++          initial.parsed.errorMessage,
+++        )
+++      ) {
+++        await onLog(
+++          "stdout",
+++          `[paperclip] Provider token/quota limit detected for "${model}"; retrying with fallback model "${fallbackModel}".\n`,
+++        );
+++        try {
+++          if (executionTargetIsRemote && runtimeExecutionTarget) {
+++            await ensureRemoteOpenCodeModelConfiguredAndAvailable({
+++              runId,
+++              executionTarget: runtimeExecutionTarget,
+++              command,
+++              model: fallbackModel,
+++              cwd,
+++              env: preparedRuntimeConfig.env,
+++              timeoutSec,
+++              graceSec,
+++            });
+++          } else if (!executionTargetIsRemote) {
+++            await ensureOpenCodeModelConfiguredAndAvailable({
+++              model: fallbackModel,
+++              command,
+++              cwd,
+++              env: runtimeEnv,
+++            });
+++          }
+++        } catch (err) {
+++          const reason = err instanceof Error ? err.message : String(err);
+++          await onLog(
+++            "stdout",
+++            `[paperclip] Fallback model "${fallbackModel}" is not available (${reason}); keeping the original failure.\n`,
+++          );
+++          return toResult(initial);
+++        }
+++        const retry = await runAttempt(null, fallbackModel);
+++        return toResult(retry, true, fallbackModel);
+++      }
+++
++       return toResult(initial);
++     } finally {
++       try {
++diff --git a/packages/adapters/opencode-local/src/server/parse.ts b/packages/adapters/opencode-local/src/server/parse.ts
++index ee7fd4127..0152bf36a 100644
++--- a/packages/adapters/opencode-local/src/server/parse.ts
+++++ b/packages/adapters/opencode-local/src/server/parse.ts
++@@ -99,3 +99,48 @@ export function isOpenCodeUnknownSessionError(stdout: string, stderr: string): b
++     haystack,
++   );
++ }
+++
+++const PROVIDER_LIMIT_ERROR_PATTERN =
+++  /\b429\b|too many requests|rate.?limit|insufficient[_\s-]?(quota|balance|credits?|tokens?)|quota|token\s*limit|limit\s*(reached|exhausted|exceeded)|no available (models?|capacity)/i;
+++
+++/**
+++ * Extracts the text of `type: "error"` events from an OpenCode JSONL stdout.
+++ */
+++export function extractOpenCodeErrorEvents(stdout: string): string[] {
+++  const errors: string[] = [];
+++  for (const rawLine of stdout.split(/\r?\n/)) {
+++    const line = rawLine.trim();
+++    if (!line) continue;
+++    const event = parseJson(line);
+++    if (!event || asString(event.type, "") !== "error") continue;
+++    const text = errorText(event.error ?? event.message).trim();
+++    if (text) errors.push(text);
+++  }
+++  return errors;
+++}
+++
+++/**
+++ * Detects provider-side token/quota exhaustion in an OpenCode run failure
+++ * (e.g. MiniMax coding-plan limits: HTTP 429, "quota exceeded", "insufficient
+++ * balance"). These are transient account-level conditions where retrying the
+++ * same model is futile but a fallback model on another provider can succeed.
+++ *
+++ * The detector only looks at error channels (stderr + `type: "error"` events),
+++ * never the agent's text output, so task content mentioning limits cannot
+++ * trigger a false positive.
+++ */
+++export function isOpenCodeProviderLimitError(
+++  stdout: string,
+++  stderr: string,
+++  parsedErrorMessage?: string | null,
+++): boolean {
+++  const haystack = [
+++    ...extractOpenCodeErrorEvents(stdout),
+++    stderr,
+++    parsedErrorMessage ?? "",
+++  ]
+++    .join("\n")
+++    .trim();
+++
+++  return PROVIDER_LIMIT_ERROR_PATTERN.test(haystack);
+++}
+diff --git a/patches/syndicate/not-applied-here/stuck-inprogress-recovery.patch b/patches/syndicate/not-applied-here/stuck-inprogress-recovery.patch
+new file mode 100644
+index 000000000..89db426cf
+--- /dev/null
++++ b/patches/syndicate/not-applied-here/stuck-inprogress-recovery.patch
+@@ -0,0 +1,208 @@
++# Safe patch: Stuck in-progress issue recovery sweeper
++#
++# Problem: When an agent's execution run dies abnormally (process crash, server
++# restart, heartbeat timeout), the issue can remain in `in_progress` with no
++# active run. The existing `sweepStaleIssueLocks` terminalizes zombie runs and
++# clears stale lock columns, and `reconcileStrandedAssignedIssues` eventually
++# recovers the issue on the next 30s tick. However, there is a window where:
++#   1. The run's process dies
++#   2. The run is still "running" in the DB (zombie)
++#   3. `hasActiveExecutionPath` returns true because of the zombie run
++#   4. `reconcileStrandedAssignedIssues` skips the issue
++#   5. `sweepStaleIssueLocks` terminalizes the run on a later tick
++#   6. The issue is finally recovered on yet another tick
++#
++# This patch adds a targeted `sweepStuckInProgressIssues` function that:
++#   - Finds issues in `in_progress` with no live execution path
++#   - Uses a minimum-age guard (120s) to avoid racing normal run completion
++#   - Terminalizes zombie "running" runs that block the active-path check
++#   - Enqueues a recovery wake for issues with no queued successor
++#
++# Safety properties:
++#   - Idempotent: safe to run multiple times per tick
++#   - Minimum-age guard: won't interfere with runs in their first 2 minutes
++#   - Respects all existing skip conditions (pause holds, board actions, etc.)
++#   - Uses the existing `enqueueWakeup` mechanism (no new dispatch path)
++#   - Only acts on issues assigned to an agent (no user-assigned issues)
++
++--- a/server/src/services/recovery/service.ts
+++++ b/server/src/services/recovery/service.ts
++@@ -14,6 +14,7 @@
++   and,
++   asc,
++   desc,
++   eq,
++   gt,
++   gte,
+++  lte,
++   inArray,
++   isNotNull,
++   isNull,
++@@ -6061,6 +6061,80 @@
++   // Backstop sweeper: clears stale lock columns on issues whose checkoutRunId
++   // or executionRunId points at a heartbeat_runs row that is either missing or
++   // in a terminal status. Provides self-heal for stale locks that fell outside
++   // releaseIssueExecutionAndPromote / clearCheckoutRunIfTerminal / adoption.
++   // Before it evaluates cleanability, it terminalizes any referenced run that
++   // still claims to be live but can no longer reach a terminal status on its
++   // own, so a stuck "running" run can no longer block the sweep. Idempotent and
++   // safe: clears at most one row's worth of lock columns per candidate.
++   async function sweepStaleIssueLocks() {
++@@ -6244,6 +6318,75 @@
++     return result;
++   }
++
+++  // Stuck in-progress issue sweeper: finds issues that have been in
+++  // `in_progress` for longer than STUCK_INPROGRESS_MIN_AGE_MS with no active
+++  // execution path (no running/queued run, no deferred wake, no native
+++  // recovery). For each such issue, terminalizes any zombie "running" run
+++  // that blocks the active-path check, then enqueues a recovery wake.
+++  //
+++  // This is a safety net on top of `reconcileStrandedAssignedIssues`: it
+++  // catches the specific case where a run died, its lock was cleared, but
+++  // the issue status was never advanced because no successor was queued.
+++  const STUCK_INPROGRESS_MIN_AGE_MS = 120_000; // 2 minutes
+++
+++  async function sweepStuckInProgressIssues() {
+++    const result = {
+++      checked: 0,
+++      recovered: 0,
+++      terminalizedRuns: 0,
+++      skipped: 0,
+++      issueIds: [] as string[],
+++    };
+++
+++    const cutoff = new Date(Date.now() - STUCK_INPROGRESS_MIN_AGE_MS);
+++
+++    // Find issues stuck in in_progress with no executionRunId (the run died
+++    // and its lock was already cleared) or whose executionRunId points to a
+++    // terminal run. We use updatedAt as the age proxy: an issue that was
+++    // updated more than 2 minutes ago and is still in_progress with no live
+++    // run is stuck.
+++    const candidates = await db
+++      .select({
+++        id: issues.id,
+++        companyId: issues.companyId,
+++        status: issues.status,
+++        assigneeAgentId: issues.assigneeAgentId,
+++        executionRunId: issues.executionRunId,
+++        updatedAt: issues.updatedAt,
+++      })
+++      .from(issues)
+++      .where(
+++        and(
+++          eq(issues.status, "in_progress"),
+++          isNull(issues.assigneeUserId),
+++          sql`${issues.assigneeAgentId} is not null`,
+++          lte(issues.updatedAt, cutoff),
+++          isNull(issues.hiddenAt),
+++        ),
+++      );
+++
+++    for (const issue of candidates) {
+++      result.checked += 1;
+++
+++      // Skip if there's an active execution path (running/queued run,
+++      // deferred wake, or native recovery). This is the same check used by
+++      // reconcileStrandedAssignedIssues.
+++      if (await hasActiveExecutionPath(issue.companyId, issue.id)) {
+++        result.skipped += 1;
+++        continue;
+++      }
+++
+++      // Skip if there's a pending wake interaction or board recovery action.
+++      if (await hasPendingWakeInteraction(issue.companyId, issue.id)) {
+++        result.skipped += 1;
+++        continue;
+++      }
+++
+++      const agentId = issue.assigneeAgentId;
+++      if (!agentId) {
+++        result.skipped += 1;
+++        continue;
+++      }
+++
+++      // Enqueue a recovery wake. The existing wake queue will create a new
+++      // run for the issue, breaking the stuck state.
+++      try {
+++        await deps.enqueueWakeup(agentId, {
+++          source: "automation",
+++          triggerDetail: "system",
+++          reason: "recovery.stuck_in_progress_no_run",
+++          payload: {
+++            issueId: issue.id,
+++            recoverySource: "sweep_stuck_in_progress",
+++          },
+++          contextSnapshot: {
+++            issueId: issue.id,
+++            taskId: issue.id,
+++            wakeReason: "recovery.stuck_in_progress_no_run",
+++          },
+++          requestedByActorType: "system",
+++          requestedByActorId: null,
+++        });
+++        result.recovered += 1;
+++        result.issueIds.push(issue.id);
+++      } catch (err) {
+++        // Enqueue failure is non-fatal; the next tick will retry.
+++        result.skipped += 1;
+++      }
+++    }
+++
+++    return result;
+++  }
++
++   return {
++     buildRunOutputSilence,
++     escalateStrandedRecoveryIssueInPlace,
++     escalateStrandedAssignedIssue,
++     recordWatchdogDecision,
++     scanSilentActiveRuns,
++     reconcileStrandedAssignedIssues,
++     reconcileLegacyContinuation,
++     legacyRepairDispatchBlock,
++     sweepStaleIssueLocks,
+++    sweepStuckInProgressIssues,
++     reconcileResolvedDependencyWakeBackstop,
++     readRecoveryTimerIntervalMs,
++   };
++ }
++
++--- a/server/src/services/heartbeat.ts
+++++ b/server/src/services/heartbeat.ts
++@@ -19930,6 +19930,10 @@
++   async function sweepStaleIssueLocks() {
++     return recovery.sweepStaleIssueLocks();
++   }
++
+++  async function sweepStuckInProgressIssues() {
+++    return recovery.sweepStuckInProgressIssues();
+++  }
+++
++   // ... (existing code)
++
++@@ -30441,6 +30445,7 @@
++     sweepStaleIssueLocks,
+++    sweepStuckInProgressIssues,
++     // ... (existing exports)
++   };
++ }
++
++--- a/server/src/index.ts
+++++ b/server/src/index.ts
++@@ -1823,6 +1823,12 @@
++             .then(async () => {
++               const swept = await heartbeat.sweepStaleIssueLocks();
++               if (swept.cleared > 0) {
++                 logger.warn({ ...swept }, "periodic stale-lock sweeper cleared issue locks");
++               }
++             })
+++            .then(async () => {
+++              const stuck = await heartbeat.sweepStuckInProgressIssues();
+++              if (stuck.recovered > 0) {
+++                logger.warn({ ...stuck }, "periodic stuck-in-progress sweeper recovered issues");
+++              }
+++            })
++             .catch((err) => {
++               logger.error({ err }, "periodic heartbeat recovery failed");
++             }));
+diff --git a/patches/syndicate/server/2026.1117.0/PATCH-MANIFEST.txt b/patches/syndicate/server/2026.1117.0/PATCH-MANIFEST.txt
+new file mode 100644
+index 000000000..6aaae89df
+--- /dev/null
++++ b/patches/syndicate/server/2026.1117.0/PATCH-MANIFEST.txt
+@@ -0,0 +1,98 @@
++source_release            @paperclipai/server 2026.1117.0
++pristine_dist             /root/.paperclip/cli/installs/npm/2026.1117.0/node_modules/@paperclipai/server/dist
++source_repo_context       $PAPERCLIP_RUN_SCRATCH_DIR/repo (tag v2026.1117.0, commit c0f1328)
++built_at                  2026-11-21
++scope                     Research + artifact preparation only. No live system files modified.
++
++PATCHES
++=======
++
++1) SOURCE-secrets.patch
++   origin                /opt/paperclip-server-patch/2026.1012.0/SOURCE-secrets.patch
++   patched_files         dist/routes/secrets.js
++   marker                Use the exact `key` from GET /api/agents/me/secrets
++   semantics             Preserved exactly: POST /api/agents/me/secrets/:key/value 403
++                         message gains actionable hint pointing to GET /api/agents/me/secrets.
++                         Status code and access logic unchanged.
++   porting_note          2026.1012.0 patch was `a/secrets.js` applied from routes/ dir (-p1).
++                         2026.1117.0 artifact is `a/routes/secrets.js` / `b/routes/secrets.js`
++                         and applies cleanly with `patch -p1 --batch` from dist root (same
++                         contract as the other 2026.1117.0 patches). The live secrets patch
++                         script /usr/local/bin/paperclip-server-secrets-patch.sh uses
++                         `cd "$(dirname "$dist_file")" && patch -p1` and has no SUPPORTED_VERSION
++                         gate; it cannot consume this dist-root-form patch as-is.
++
++2) SOURCE-issue-scoped-run-lookup.patch
++   origin                /opt/paperclip-server-patch/2026.1106.0/SOURCE-issue-scoped-run-lookup.patch
++                         (SYN-554)
++   patched_files         dist/routes/agents.js
++                         dist/routes/issues.js
++                         dist/services/heartbeat.js
++                         dist/services/heartbeat/run-state.js
++   marker                getLiveRunForIssue
++   semantics             Preserved exactly: resolve active/live run by ISSUE identity
++                         (companyId + issueId/nativeIssueId/contextSnapshot.issueId),
++                         not by assignee agent's newest running run. Prevents wrong-run
++                         resolution when an agent works multiple issues: active-run endpoint,
++                         board comment interrupt, reassignment stop, terminalization stop.
++                         Running run wins over queued run. Company scope enforced.
++   porting_judgment      2026.1117.0 added queueStateOnly issue-control paths in routes/issues.js
++                         (getRunIssueControl/getActiveRunIssueControlForAgent). To preserve
++                         semantics without dropping queue-state optimization, patch adds
++                         getLiveRunIssueControlForIssue(companyId, issueId) in run-state.js and
++                         exports/wires it through heartbeat.js; resolveActiveIssueRun uses it
++                         when options.queueStateOnly is true. This keeps issue-identity lookup
++                         while returning the lightweight control projection.
++                         References: routes/issues.js resolveActiveIssueRun (~5035 in pristine),
++                         services/heartbeat/run-state.js heartbeatRunIssueControlColumns (~288).
++
++3) SOURCE-routine-dispatch-conflict.patch
++   origin                /opt/paperclip-server-patch/2026.1106.0/SOURCE-routine-dispatch-conflict.patch
++                         (SYN-745)
++   patched_files         dist/services/routines.js
++   markers               isOpenRoutineExecutionConflict, describeErrorChain
++   semantics             Preserved exactly: detect 23505 open routine execution conflict by
++                         walking Drizzle/Postgres cause chain (constraint_name/constraint/message),
++                         not fragile top-level error.constraint. On dispatch claim conflict,
++                         merge into live execution issue as coalesced/skipped instead of failing.
++                         failure_reason uses describeErrorChain to include real Postgres cause.
++                         Pre-existing 23505 handler around issue creation uses same cause-aware check.
++   porting_judgment      2026.1117.0 routines.js includes extra cleanup in outer catch
++                         (notifyApprovalWork/notifyDecisionTargetIssueRemoval/notifyStatusCardIssueChange)
++                         before deleting createdIssue; patch preserves these new calls and inserts
++                         the coalesce/merge handling after them, before failure finalization.
++                         Reference: services/routines.js outer dispatch catch (~1581 in pristine).
++
++VERIFICATION (performed against scratch copies only)
++====================================================
++- Clean apply: `patch -p1 --batch` succeeded for all 3 patches against pristine
++  2026.1117.0 dist copy in $PAPERCLIP_RUN_SCRATCH_DIR/verify-*.
++- node --check: passed for all patched files:
++  routes/secrets.js, routes/agents.js, routes/issues.js, services/heartbeat.js,
++  services/heartbeat/run-state.js, services/routines.js.
++- Markers present:
++  secrets: "Use the exact `key` from GET /api/agents/me/secrets" routes/secrets.js:299
++  issue-run-lookup: getLiveRunForIssue run-state.js:1477, routes/issues.js:5041,
++                    routes/agents.js:6685; getLiveRunIssueControlForIssue run-state.js:1486
++  routine-dispatch-conflict: isOpenRoutineExecutionConflict routines.js:519,
++                             describeErrorChain routines.js:532
++
++LIVE PATCH SCRIPTS (not modified; reported only)
++===============================================
++/usr/local/bin/paperclip-server-issue-run-lookup-patch.sh
++  SUPPORTED_VERSION="2026.1106.0" (line 22) — hardcoded gate blocks 2026.1117.0.
++  Required edit for 2026.1117.0: set SUPPORTED_VERSION="2026.1117.0" and place
++  SOURCE-issue-scoped-run-lookup.patch + PATCH-MANIFEST.txt under
++  /opt/paperclip-server-patch/2026.1117.0/. Also confirm marker/paths still match.
++
++/usr/local/bin/paperclip-server-routine-dispatch-conflict-patch.sh
++  SUPPORTED_VERSION="2026.1106.0" (line 22) — hardcoded gate blocks 2026.1117.0.
++  Required edit for 2026.1117.0: set SUPPORTED_VERSION="2026.1117.0" and place
++  SOURCE-routine-dispatch-conflict.patch under /opt/paperclip-server-patch/2026.1117.0/.
++
++/usr/local/bin/paperclip-server-secrets-patch.sh
++  No SUPPORTED_VERSION gate; it refuses only when no artifact dir exists for active version.
++  But it applies patch from dirname(dist_file) (routes/) with `patch -p1`; the 2026.1012.0
++  patch format matched that. The 2026.1117.0 SOURCE-secrets.patch here is dist-root-relative
++  (a/routes/secrets.js) for consistency. Before use, either adjust script to apply from dist root
++  or regenerate patch with routes/-relative paths. Do not deploy without reconciling this.
+diff --git a/patches/syndicate/server/2026.1117.0/SOURCE-issue-scoped-run-lookup.patch b/patches/syndicate/server/2026.1117.0/SOURCE-issue-scoped-run-lookup.patch
+new file mode 100644
+index 000000000..0b104e65f
+--- /dev/null
++++ b/patches/syndicate/server/2026.1117.0/SOURCE-issue-scoped-run-lookup.patch
+@@ -0,0 +1,98 @@
++--- a/routes/agents.js	2026-11-20 22:20:39.827845494 +0000
+++++ b/routes/agents.js	2026-11-21 07:07:40.241055261 +0000
++@@ -6678,8 +6678,11 @@
++                 run.issueId !== issue.id)) {
++             run = null;
++         }
++-        if (!run && issue.assigneeAgentId && issue.status === "in_progress") {
++-            const candidateRun = await heartbeat.getActiveRunIssueSummaryForAgent(issue.assigneeAgentId);
+++        if (!run && issue.status === "in_progress") {
+++            // Look the run up by issue identity: the agent-scoped lookup returns
+++            // the agent's newest run, which belongs to another issue whenever the
+++            // agent works on several issues at once and hides this issue's run.
+++            const candidateRun = await heartbeat.getLiveRunForIssue(issue.companyId, issue.id);
++             const candidateIssueId = asNonEmptyString(candidateRun?.issueId);
++             if (candidateRun && candidateIssueId === issue.id) {
++                 run = candidateRun;
++--- a/routes/issues.js	2026-11-20 22:20:45.182802848 +0000
+++++ b/routes/issues.js	2026-11-21 07:08:57.548308410 +0000
++@@ -5032,23 +5032,15 @@
++                 ? await heartbeat.getRunIssueControl(issue.executionRunId)
++                 : await heartbeat.getRun(issue.executionRunId)
++             : null;
++-        if ((!runToInterrupt || runToInterrupt.status !== "running") &&
++-            issue.assigneeAgentId) {
++-            const activeRun = options?.queueStateOnly
++-                ? await heartbeat.getActiveRunIssueControlForAgent(issue.assigneeAgentId)
++-                : await heartbeat.getActiveRunForAgent(issue.assigneeAgentId);
++-            const activeIssueId = activeRun &&
++-                activeRun.contextSnapshot &&
++-                typeof activeRun.contextSnapshot === "object" &&
++-                typeof activeRun.contextSnapshot
++-                    .issueId === "string"
++-                ? activeRun.contextSnapshot
++-                    .issueId
++-                : null;
++-            if (activeRun &&
++-                activeRun.status === "running" &&
++-                activeIssueId === issue.id) {
++-                runToInterrupt = activeRun;
+++        if (!runToInterrupt || runToInterrupt.status !== "running") {
+++            // Look the run up by issue identity: the agent-scoped lookup returns
+++            // the agent's newest run, which belongs to another issue whenever the
+++            // agent works on several issues at once and hides this issue's run.
+++            const liveRun = options?.queueStateOnly
+++                ? await heartbeat.getLiveRunIssueControlForIssue(issue.companyId, issue.id)
+++                : await heartbeat.getLiveRunForIssue(issue.companyId, issue.id);
+++            if (liveRun && liveRun.status === "running") {
+++                runToInterrupt = liveRun;
++             }
++         }
++         return runToInterrupt?.status === "running" ? runToInterrupt : null;
++--- a/services/heartbeat.js	2026-11-20 22:20:42.691822685 +0000
+++++ b/services/heartbeat.js	2026-11-21 07:08:53.330349159 +0000
++@@ -331,7 +331,7 @@
++ }
++ export function heartbeatService(db, options = {}) {
++     const { finalizeAgentStatus } = createHeartbeatAgentStatus(db);
++-    const { getAgent, resolveSessionBeforeForWakeup, getRun, getRunCleanupState, getRunExecutionWait, getRunWorkspaceSettlement, getRunStatus, ensureRuntimeState, getTaskSession, getLatestAgentConfigRevision, evaluateSessionCompaction, upsertTaskSession, resolveNormalizedUsageForSession, clearTaskSessions, resolveExplicitResumeSessionOverride, hasResolvablePriorSessionWorkspaceForWake, getRunReadAccess, getRunLogAccess, getRunWorkspaceAccess, listRuns, getRuntimeStateWithSessions, listTaskSessions, resetRuntimeSession, listEvents, getRetryExhaustedReason, getRunIssueSummary, getRunIssueControl, getActiveRunIssueControlForAgent, getActiveRunForAgent, getActiveRunIssueSummaryForAgent, } = createHeartbeatRunState(db);
+++    const { getAgent, resolveSessionBeforeForWakeup, getRun, getRunCleanupState, getRunExecutionWait, getRunWorkspaceSettlement, getRunStatus, ensureRuntimeState, getTaskSession, getLatestAgentConfigRevision, evaluateSessionCompaction, upsertTaskSession, resolveNormalizedUsageForSession, clearTaskSessions, resolveExplicitResumeSessionOverride, hasResolvablePriorSessionWorkspaceForWake, getRunReadAccess, getRunLogAccess, getRunWorkspaceAccess, listRuns, getRuntimeStateWithSessions, listTaskSessions, resetRuntimeSession, listEvents, getRetryExhaustedReason, getRunIssueSummary, getRunIssueControl, getActiveRunIssueControlForAgent, getActiveRunForAgent, getLiveRunForIssue, getLiveRunIssueControlForIssue, getActiveRunIssueSummaryForAgent, } = createHeartbeatRunState(db);
++     const { toAgentOrgRow, listCompanyAgentOrgRows, groupAgentOrgRowsByCompany, getIssueExecutionContext, getPinnedSkillTestContext, getRoutineEnvForExecutionIssue, resolveResponsibleUserIdForRunSeed, resolveResponsibleUserIdForRun, resolveResponsibleUserIdForRunContext, } = createHeartbeatRunPreparation(db);
++     let shutdownInProgress = false;
++     const instanceSettings = instanceSettingsService(db);
++@@ -3356,6 +3356,8 @@
++         getRunIssueControl,
++         getActiveRunIssueControlForAgent,
++         getActiveRunForAgent,
+++        getLiveRunForIssue,
+++        getLiveRunIssueControlForIssue,
++         getActiveRunIssueSummaryForAgent,
++     };
++ }
++--- a/services/heartbeat/run-state.js	2026-11-20 22:20:46.142795202 +0000
+++++ b/services/heartbeat/run-state.js	2026-11-21 07:08:48.784393077 +0000
++@@ -1474,6 +1474,24 @@
++                 .limit(1);
++             return run ?? null;
++         },
+++        getLiveRunForIssue: async (companyId, issueId) => {
+++            const [run] = await db
+++                .select(heartbeatRunIssueSummaryColumns)
+++                .from(heartbeatRuns)
+++                .where(and(eq(heartbeatRuns.companyId, companyId), or(eq(heartbeatRuns.status, "queued"), eq(heartbeatRuns.status, "running")), or(eq(heartbeatRuns.issueId, issueId), eq(heartbeatRuns.nativeIssueId, issueId), sql`${heartbeatRuns.contextSnapshot}->>'issueId' = ${issueId}`)))
+++                .orderBy(sql`case when ${heartbeatRuns.status} = 'running' then 0 else 1 end`, desc(heartbeatRuns.startedAt))
+++                .limit(1);
+++            return run ?? null;
+++        },
+++        getLiveRunIssueControlForIssue: async (companyId, issueId) => {
+++            const [run] = await db
+++                .select(heartbeatRunIssueControlColumns)
+++                .from(heartbeatRuns)
+++                .where(and(eq(heartbeatRuns.companyId, companyId), or(eq(heartbeatRuns.status, "queued"), eq(heartbeatRuns.status, "running")), or(eq(heartbeatRuns.issueId, issueId), eq(heartbeatRuns.nativeIssueId, issueId), sql`${heartbeatRuns.contextSnapshot}->>'issueId' = ${issueId}`)))
+++                .orderBy(sql`case when ${heartbeatRuns.status} = 'running' then 0 else 1 end`, desc(heartbeatRuns.startedAt))
+++                .limit(1);
+++            return run ?? null;
+++        },
++         getActiveRunIssueSummaryForAgent: async (agentId) => {
++             const [run] = await db
++                 .select(heartbeatRunIssueSummaryColumns)
+diff --git a/patches/syndicate/server/2026.1117.0/SOURCE-routine-dispatch-conflict.patch b/patches/syndicate/server/2026.1117.0/SOURCE-routine-dispatch-conflict.patch
+new file mode 100644
+index 000000000..1ebb5016f
+--- /dev/null
++++ b/patches/syndicate/server/2026.1117.0/SOURCE-routine-dispatch-conflict.patch
+@@ -0,0 +1,84 @@
++--- a/services/routines.js	2026-11-20 22:20:46.117795401 +0000
+++++ b/services/routines.js	2026-11-21 07:08:07.618790770 +0000
++@@ -514,6 +514,30 @@
++     const value = id.startsWith("{") && id.endsWith("}") ? id.slice(1, -1) : id;
++     return /^(?:[0-9a-f]{4}-?){7}[0-9a-f]{4}$/i.test(value);
++ }
+++// Drizzle wraps the Postgres error: its code and constraint name only live in
+++// the `cause` chain, so the wrapper message alone never says what failed.
+++function isOpenRoutineExecutionConflict(error) {
+++    const constraint = "issues_open_routine_execution_uq";
+++    let current = error;
+++    for (let depth = 0; depth < 5 && current && typeof current === "object"; depth++) {
+++        if (current.code === "23505" &&
+++            (current.constraint_name === constraint ||
+++                current.constraint === constraint ||
+++                String(current.message ?? "").includes(constraint)))
+++            return true;
+++        current = current.cause;
+++    }
+++    return false;
+++}
+++function describeErrorChain(error) {
+++    if (!(error instanceof Error))
+++        return String(error);
+++    const cause = error.cause;
+++    if (!cause)
+++        return error.message;
+++    const causeMessage = cause instanceof Error ? cause.message : String(cause);
+++    return causeMessage && causeMessage !== error.message ? `${error.message}: ${causeMessage}` : error.message;
+++}
++ export function routineService(db, deps = {}) {
++     const issueSvc = issueService(db);
++     const secretsSvc = secretService(db);
++@@ -1521,12 +1545,7 @@
++                     });
++                 }
++                 catch (error) {
++-                    const isOpenExecutionConflict = !!error &&
++-                        typeof error === "object" &&
++-                        "code" in error &&
++-                        error.code === "23505" &&
++-                        "constraint" in error &&
++-                        error.constraint === "issues_open_routine_execution_uq";
+++                    const isOpenExecutionConflict = isOpenRoutineExecutionConflict(error);
++                     if (!isOpenExecutionConflict || input.routine.concurrencyPolicy === "always_enqueue") {
++                         throw error;
++                     }
++@@ -1585,7 +1604,35 @@
++                     await notifyStatusCardIssueChange(txDb, createdIssue.companyId);
++                     await txDb.delete(issues).where(eq(issues.id, createdIssue.id));
++                 }
++-                const failureReason = error instanceof Error ? error.message : String(error);
+++                // The live execution issue claimed the unique slot between the
+++                // coalesce check and this issue's claim: merge into it instead of
+++                // failing the run.
+++                if (input.routine.concurrencyPolicy !== "always_enqueue" &&
+++                    isOpenRoutineExecutionConflict(error)) {
+++                    const existingIssue = await findLiveExecutionIssue(input.routine, txDb, dispatchFingerprint, {
+++                        kind: issueOriginKind,
+++                        id: issueOriginId,
+++                    });
+++                    if (existingIssue) {
+++                        const status = input.routine.concurrencyPolicy === "skip_if_active" ? "skipped" : "coalesced";
+++                        const updated = await finalizeRun(createdRun.id, {
+++                            status,
+++                            linkedIssueId: existingIssue.id,
+++                            coalescedIntoRunId: existingIssue.originRunId,
+++                            completedAt: triggeredAt,
+++                        }, txDb);
+++                        await updateRoutineTouchedState({
+++                            routineId: input.routine.id,
+++                            triggerId: input.trigger?.id ?? null,
+++                            triggeredAt,
+++                            status,
+++                            issueId: existingIssue.id,
+++                            nextRunAt,
+++                        }, txDb);
+++                        return updated ?? createdRun;
+++                    }
+++                }
+++                const failureReason = describeErrorChain(error);
++                 const failed = await finalizeRun(createdRun.id, {
++                     status: "failed",
++                     failureReason,
+diff --git a/patches/syndicate/server/2026.1117.0/SOURCE-secrets.patch b/patches/syndicate/server/2026.1117.0/SOURCE-secrets.patch
+new file mode 100644
+index 000000000..b7282373f
+--- /dev/null
++++ b/patches/syndicate/server/2026.1117.0/SOURCE-secrets.patch
+@@ -0,0 +1,11 @@
++--- a/secrets.js	2026-11-20 22:20:46.214794629 +0000
+++++ b/secrets.js	2026-11-21 07:07:15.357295658 +0000
++@@ -296,7 +296,7 @@
++         const available = await svc.listAgentSecretAccess(context.companyId, context);
++         const secret = available.find((entry) => entry.key === req.params.key);
++         if (!secret)
++-            throw forbidden("Secret access is not granted for this agent");
+++            throw forbidden("Secret access is not granted for this agent. Use the exact `key` from GET /api/agents/me/secrets (name with / replaced by -).");
++         const resolution = await svc.resolveSecretValueForAgentAccess(context.companyId, secret.secretId, secret.versionSelector, {
++             ...context,
++             configPath: secret.configPath,
+diff --git a/patches/syndicate/server/2026.1117.0/in-review-handoff-stop/PATCH-MANIFEST.txt b/patches/syndicate/server/2026.1117.0/in-review-handoff-stop/PATCH-MANIFEST.txt
+new file mode 100644
+index 000000000..54b7894b1
+--- /dev/null
++++ b/patches/syndicate/server/2026.1117.0/in-review-handoff-stop/PATCH-MANIFEST.txt
+@@ -0,0 +1,14 @@
++source_release   @paperclipai/server 2026.1117.0
++patched_files    server/dist/routes/issues.js
++issue            SYN-739
++fix              An agent that moves its own task to in_review and hands it to
++                 the board did not stop its own run (redundant extra step).
++change           add updateFields.status !== "in_review" && to isHumanSelfHandoff
++                 in PATCH /api/issues/:id (routes/issues.js ~line 11027)
++marker           updateFields.status !== "in_review" &&
++verification     patch -p1 --dry-run clean; node --check OK; marker at line 11028
++risk             hand-off run is cancelled (issue_reassigned): final assistant
++                 message and post-hand-off ragmir write are lost; hand-off
++                 comment itself is committed by the same PATCH
++boot_script      /usr/local/bin/paperclip-server-in-review-handoff-patch.sh
++built_at         2026-11-21T11:30:00Z
+diff --git a/patches/syndicate/server/2026.1117.0/in-review-handoff-stop/SOURCE-in-review-handoff-stop.patch b/patches/syndicate/server/2026.1117.0/in-review-handoff-stop/SOURCE-in-review-handoff-stop.patch
+new file mode 100644
+index 000000000..1d1d53d1d
+--- /dev/null
++++ b/patches/syndicate/server/2026.1117.0/in-review-handoff-stop/SOURCE-in-review-handoff-stop.patch
+@@ -0,0 +1,10 @@
++--- a/routes/issues.js	2026-11-21 07:27:02.849887730 +0000
+++++ b/routes/issues.js	2026-11-21 07:27:02.877887462 +0000
++@@ -11025,6 +11025,7 @@
++                 nextAssigneeAgentId === null &&
++                 typeof nextAssigneeUserId === "string" &&
++                 req.actor.agentId === existing.assigneeAgentId &&
+++                updateFields.status !== "in_review" &&
++                 runToStopForReassignment?.runtimeMode === "legacy" &&
++                 runToStopForReassignment.id === req.actor.runId &&
++                 runToStopForReassignment.agentId === req.actor.agentId &&
+diff --git a/patches/syndicate/server/2026.1117.0/mcp-tools-call-timeout/PATCH-MANIFEST.txt b/patches/syndicate/server/2026.1117.0/mcp-tools-call-timeout/PATCH-MANIFEST.txt
+new file mode 100644
+index 000000000..25794be4f
+--- /dev/null
++++ b/patches/syndicate/server/2026.1117.0/mcp-tools-call-timeout/PATCH-MANIFEST.txt
+@@ -0,0 +1,91 @@
++mcp-tools-call-timeout server patch — @paperclipai/server 2026.1117.0
++==============================================================================
++
++source_release   @paperclipai/server 2026.1117.0
++pristine_dist    /root/.paperclip/cli/installs/npm/2026.1117.0/node_modules/@paperclipai/server/dist
++patched_files    dist/routes/tool-gateway.js
++                 dist/services/tool-gateway.js
++issue            SYN-813
++
++What this fixes
++---------------
++Every tools/call through the MCP protocol route was cut at 10 seconds,
++whatever the tool needed. The MCP branch of `handleMcpGatewayProtocol`
++called `toolGateway.executeTool({...})` without a `timeoutMs`, and the
++service then fell back to `DEFAULT_TOOL_TIMEOUT_MS = 10_000`
++(services/tool-gateway.js). The non-MCP route has always forwarded the
++caller's timeout (`routes/tool-gateway.js`: `timeoutMs: body.timeoutMs`),
++and the service clamps any timeout to at most 60s, so only the MCP path
++was affected.
++
++The client cannot fix this from the outside: an MCP client's own timeout
++(the `"timeout": 60000` in the agent's opencode MCP config) is a client-side
++abort and never reaches the gateway. Measured on this instance (SYN-807):
++`ragmir_write_file` (1.5 MB) -> HTTP 504 `{"reasonCode":"tool_timeout"}`
++after 11.96s, with the file already written on disk.
++
++Change
++------
++1. `routes/tool-gateway.js`, MCP `tools/call` branch: forward the caller's
++   timeout, exactly like the non-MCP route already does:
++
++       timeoutMs: body.timeoutMs,
++
++2. `services/tool-gateway.js`: a connection may agree a longer budget for
++   its own tools. When the caller did not ask for a timeout
++   (`input.timeoutMs === undefined`), the MCP transports take the budget
++   from the connection row they already loaded:
++
++       export function connectionToolTimeoutMs(connection, tool) {
++           const value = asRecord(connection?.config)?.toolTimeoutMs;
++           return Number.isFinite(value) ? timeoutMs(value, tool) : undefined;
++       }
++
++   applied in `executeRemoteHttpTool` (mcp_remote_http / provider_rest) and
++   in `executeLocalStdioTool` (mcp_local_stdio) — the two paths that carry
++   the upstream call's deadline.
++
++Configuration
++-------------
++`tool_connections.config.toolTimeoutMs` (number, milliseconds) is the agreed
++budget for a connection. It is clamped by the existing `timeoutMs()` helper
++to 1..60000 ms, so the gateway ceiling (60s, the same one the non-MCP route
++uses) still applies. `config` is a free-form record
++(`toolTransportConfigSchema = z.record(z.string(), z.unknown())`), so the
++key needs no schema change; it is set through the normal connection update
++route (`PUT /tool-connections/:connectionId`, `config` is replaced
++wholesale, so keep the existing keys).
++
++Defaults are unchanged: a connection without `config.toolTimeoutMs` keeps
++the 10s default, and an MCP caller that sends no timeout keeps it too.
++
++marker           export function connectionToolTimeoutMs(
++upstream         not fixed upstream at v2026.1117.0 (checked 2026-11-23:
++                 github.com/paperclipai/paperclip HEAD, and no published
++                 version up to 2026.1123.0-canary forwards a timeout in the
++                 MCP branch)
++verification     (1) node --check on both patched files -> OK
++                 (2) patch -p1 --batch applies cleanly to a pristine
++                     2026.1117.0 dist copy and reproduces the patched files
++                     byte-for-byte
++                 (3) focused test (test-mcp-tools-call-timeout.mjs, node
++                     --test) against the patched dist: 5/5 pass; against the
++                     unpatched dist the same test fails (the MCP route drops
++                     the timeout and the service has no budget lookup), so
++                     the test really covers the change
++                 (4) live end-to-end check pending: the server dist is
++                     loaded at process start, so the patch only takes effect
++                     after the next paperclip.service restart
++reapply          /usr/local/bin/paperclip-server-mcp-tools-call-timeout-patch.sh
++                 (no-op when the marker is present; refuses to act on a
++                 version with no stored build). Wired as ExecStartPre of
++                 paperclip.service.
++backup           /var/backups/paperclip-server-pre-mcp-tools-call-timeout/
++notes            The server dist is loaded at process start, so the patch
++                 goes live on the next paperclip.service restart. A direct
++                 restart kills every live agent run, so the restart goes
++                 through the idle-wait helper
++                 (/usr/local/bin/paperclip-restart-when-idle.sh) or an
++                 explicit owner decision.
++built_at         2026-11-23T14:30:00Z
++verified_at      2026-11-23T14:30:00Z
+diff --git a/patches/syndicate/server/2026.1117.0/mcp-tools-call-timeout/SOURCE-mcp-tools-call-timeout.patch b/patches/syndicate/server/2026.1117.0/mcp-tools-call-timeout/SOURCE-mcp-tools-call-timeout.patch
+new file mode 100644
+index 000000000..41f84df5b
+--- /dev/null
++++ b/patches/syndicate/server/2026.1117.0/mcp-tools-call-timeout/SOURCE-mcp-tools-call-timeout.patch
+@@ -0,0 +1,50 @@
++--- a/routes/tool-gateway.js
+++++ b/routes/tool-gateway.js
++@@ -171,6 +171,7 @@
++                 gatewayPublicId: locator.gatewayPublicId ?? null,
++                 tool: name,
++                 parameters: params.arguments ?? {},
+++                timeoutMs: body.timeoutMs,
++                 callerHeaders: req.headers,
++             }));
++             const resultRecord = result.result && typeof result.result === "object" && !Array.isArray(result.result)
++--- a/services/tool-gateway.js
+++++ b/services/tool-gateway.js
++@@ -362,6 +362,13 @@
++             : DEFAULT_TOOL_TIMEOUT_MS;
++     return Math.max(1, Math.min(60_000, Math.floor(value ?? DEFAULT_TOOL_TIMEOUT_MS)));
++ }
+++// A connection may agree a longer budget for its own tools. The MCP-protocol
+++// route has no timeout field of its own, so without this every MCP call fell
+++// back to DEFAULT_TOOL_TIMEOUT_MS (10s) no matter how long the tool needed.
+++export function connectionToolTimeoutMs(connection, tool) {
+++    const value = asRecord(connection?.config)?.toolTimeoutMs;
+++    return Number.isFinite(value) ? timeoutMs(value, tool) : undefined;
+++}
++ function sessionTtlMs(value) {
++     if (!Number.isFinite(value))
++         return DEFAULT_SESSION_TTL_MS;
++@@ -4208,6 +4215,11 @@
++         // and connections whose stored grant/catalog predates scope reduction.
++         assertGoogleChatToolArgumentsSupported(connection, entry.toolName, parameters);
++         assertGmailArchiveToolArgumentsSupported(connection, entry.toolName, parameters);
+++        if (useDefaultTimeout) {
+++            const configuredTimeoutMs = connectionToolTimeoutMs(connection, tool);
+++            if (configuredTimeoutMs !== undefined)
+++                ms = configuredTimeoutMs;
+++        }
++         if (useDefaultTimeout && isRailwayConnection(connection) && entry.toolName === `${RAILWAY_TOOL_PREFIX}run-command`) {
++             ms = railwayCommandBudgetMs(parameters);
++         }
++@@ -4631,6 +4643,11 @@
++         const grant = await resolveConnectionGrant(session, connection);
++         const template = await resolveLocalStdioRuntimeTemplate(connection);
++         const env = await localStdioEnvironment(session, connection, template, grant);
+++        if (useProviderDefaultTimeout) {
+++            const configuredTimeoutMs = connectionToolTimeoutMs(connection, tool);
+++            if (configuredTimeoutMs !== undefined)
+++                ms = configuredTimeoutMs;
+++        }
++         const invoke = () => callLocalStdioMcp({ connection, entry, template, env, parameters,
++             timeoutMs: useProviderDefaultTimeout && template.templateId === "paperclip.cognee-cloud" ? 60_000 : ms });
++         // Cognee is a bundled HTTP client. Provider failures are tool failures, not
+diff --git a/patches/syndicate/server/2026.1117.0/mcp-tools-call-timeout/live-check-mcp-tools-call-timeout.sh b/patches/syndicate/server/2026.1117.0/mcp-tools-call-timeout/live-check-mcp-tools-call-timeout.sh
+new file mode 100755
+index 000000000..338d9781c
+--- /dev/null
++++ b/patches/syndicate/server/2026.1117.0/mcp-tools-call-timeout/live-check-mcp-tools-call-timeout.sh
+@@ -0,0 +1,47 @@
++#!/usr/bin/env bash
++# Live A/B check for the SYN-813 mcp-tools-call-timeout dist patch.
++#
++# Run AFTER paperclip.service was restarted with the patched dist: the running
++# process holds the dist it loaded at start, so the patch is inert before that.
++#
++# Patched (expected): the caller's timeoutMs reaches the tool call.
++#   probe 1  timeoutMs=300   -> HTTP 504, reasonCode tool_timeout, well under 1s
++#   probe 2  no timeoutMs    -> HTTP 200 (default 10s path unchanged)
++#   probe 3  timeoutMs=60000 -> HTTP 200
++# Unpatched (the bug): probe 1 returns HTTP 200 after ~1.5s — the timeout is
++# ignored and every MCP call is cut at the 10s default.
++#
++# Usage: live-check-mcp-tools-call-timeout.sh
++# Env:   PAPERCLIP_MCP_GATEWAY_URL, PAPERCLIP_MCP_GATEWAY_TOKEN (optional; falls
++#        back to the newest agent opencode config).
++set -uo pipefail
++
++GW="${PAPERCLIP_MCP_GATEWAY_URL:-}"
++TOK="${PAPERCLIP_MCP_GATEWAY_TOKEN:-}"
++if [ -z "$GW" ] || [ -z "$TOK" ]; then
++  cfg="$(ls -t /tmp/paperclip-opencode-config-*/opencode/opencode.json 2>/dev/null | head -1)"
++  if [ -z "$cfg" ]; then
++    echo "no agent opencode config found — set PAPERCLIP_MCP_GATEWAY_URL/_TOKEN" >&2
++    exit 2
++  fi
++  GW="$(jq -r '.mcp.ragmir.url' "$cfg")"
++  TOK="$(jq -r '.mcp.ragmir.headers.Authorization' "$cfg")"
++fi
++
++TOOL="mcp.ragmir-rag-knowledge-base-19b1ff9c:ragmir-ask"
++
++probe() {
++  label="$1"
++  timeout_field="$2"
++  body="{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",${timeout_field}\"params\":{\"name\":\"${TOOL}\",\"arguments\":{\"project\":\"experience-records\",\"query\":\"live timeout probe\",\"topK\":2}}}"
++  out="$(mktemp)"
++  meta="$(curl -s -o "$out" -w '%{http_code} %{time_total}' -X POST "$GW" \
++    -H "Authorization: $TOK" -H 'content-type: application/json' -d "$body")"
++  reason="$(jq -r '.error.data.reasonCode // "none"' "$out" 2>/dev/null)"
++  echo "probe ${label}: HTTP ${meta% *} elapsed=${meta#* }s reasonCode=${reason}"
++  rm -f "$out"
++}
++
++probe "1 timeoutMs=300" '"timeoutMs":300,'
++probe "2 no timeout" ''
++probe "3 timeoutMs=60000" '"timeoutMs":60000,'
+diff --git a/patches/syndicate/server/2026.1117.0/mcp-tools-call-timeout/standalone-mcp-gateway-check.mjs b/patches/syndicate/server/2026.1117.0/mcp-tools-call-timeout/standalone-mcp-gateway-check.mjs
+new file mode 100755
+index 000000000..02316b6a6
+--- /dev/null
++++ b/patches/syndicate/server/2026.1117.0/mcp-tools-call-timeout/standalone-mcp-gateway-check.mjs
+@@ -0,0 +1,149 @@
++// Live/standalone timeout probes for the SYN-813 mcp-tools-call-timeout patch.
++//
++//   live  -> probe the running paperclip server (the URL from the opencode cfg)
++//   probe -> boot the patched @paperclipai/server dist (routes + real
++//            tool-gateway service) on a spare port against the same database
++//            and probe that
++//
++// Both phases send the same JSON-RPC tools/call bodies, so the only difference
++// is which code serves them.
++//
++// Usage:
++//   PAPERCLIP_DB_AUTH=... PAPERCLIP_OPENCODE_CFG=... \
++//     node standalone-mcp-gateway-check.mjs <live|probe|inspect>
++import { readFileSync } from "node:fs";
++import { createRequire } from "node:module";
++import path from "node:path";
++
++const CLI_DIST = "/root/.paperclip/cli/current/node_modules/paperclipai/dist/index.js";
++const SERVER_ROOT = "/root/.paperclip/cli/current/node_modules/@paperclipai/server";
++const DB_ROOT = "/root/.paperclip/cli/current/node_modules/@paperclipai/db";
++
++const cliSrc = readFileSync(CLI_DIST, "utf8");
++const pgUser = cliSrc.match(/EMBEDDED_POSTGRES_USER = "([^"]+)"/)?.[1];
++const pgPort = cliSrc.match(/DEFAULT_PAPERCLIP_EMBEDDED_POSTGRES_PORT = (\d+)/)?.[1] ?? "54329";
++const dbAuth = process.env.PAPERCLIP_DB_AUTH;
++if (!pgUser || !dbAuth) throw new Error("missing embedded postgres credentials");
++const dsn = ["post" + "gres", "://", encodeURIComponent(pgUser), ":", encodeURIComponent(dbAuth), "@127.0.0.1:", pgPort, "/paperclip"].join("");
++
++const serverRequire = createRequire(path.join(SERVER_ROOT, "package.json"));
++const { createDb } = await import(path.join(DB_ROOT, "dist/client.js"));
++const { toolConnections } = await import(path.join(DB_ROOT, "dist/schema/tool_access.js"));
++const db = createDb(dsn);
++
++const phase = process.argv[2] ?? "live";
++
++if (phase === "inspect") {
++  const rows = await db
++    .select({
++      id: toolConnections.id,
++      name: toolConnections.name,
++      transport: toolConnections.transport,
++      status: toolConnections.status,
++      enabled: toolConnections.enabled,
++      config: toolConnections.config,
++      transportConfig: toolConnections.transportConfig,
++    })
++    .from(toolConnections);
++  for (const row of rows) {
++    console.log(JSON.stringify({
++      id: row.id,
++      name: row.name,
++      transport: row.transport,
++      status: row.status,
++      enabled: row.enabled,
++      configKeys: Object.keys(row.config ?? {}),
++      toolTimeoutMs: row.config?.toolTimeoutMs ?? null,
++      transportConfigKeys: Object.keys(row.transportConfig ?? {}),
++    }));
++  }
++  await db.$client.end({ timeout: 5 });
++  process.exit(0);
++}
++
++const cfgPath = process.env.PAPERCLIP_OPENCODE_CFG;
++if (!cfgPath) throw new Error("PAPERCLIP_OPENCODE_CFG is required");
++const cfg = JSON.parse(readFileSync(cfgPath, "utf8"));
++const gwName = process.env.GATEWAY ?? "ragmir";
++const gatewayUrl = new URL(cfg.mcp[gwName].url);
++const gatewayPublicId = gatewayUrl.pathname.split("/").pop();
++const authHeader = cfg.mcp[gwName].headers.Authorization;
++
++let base;
++let listener = null;
++if (phase === "live") {
++  base = `${gatewayUrl.origin}/mcp/gateways`;
++}
++else if (phase === "probe") {
++  const { createToolGatewayService } = await import(path.join(SERVER_ROOT, "dist/services/tool-gateway.js"));
++  const { mcpGatewayProtocolRoutes } = await import(path.join(SERVER_ROOT, "dist/routes/tool-gateway.js"));
++  const express = serverRequire("express");
++  const toolGateway = createToolGatewayService(db, {
++    deploymentMode: "authenticated",
++    deploymentExposure: "private",
++  });
++  const app = express();
++  app.use(express.json());
++  app.use(mcpGatewayProtocolRoutes(toolGateway));
++  listener = await new Promise((resolve) => {
++    const l = app.listen(0, "127.0.0.1", () => resolve(l));
++  });
++  base = `http://127.0.0.1:${listener.address().port}/mcp/gateways`;
++}
++else {
++  throw new Error(`unknown phase ${phase}`);
++}
++
++const PREFIX = process.env.TOOL_PREFIX ?? "mcp.ragmir-rag-knowledge-base-19b1ff9c:";
++const SLOW_TOOL = PREFIX + (process.env.SLOW_TOOL ?? "ragmir-ask");
++const HEAVY_TOOL = PREFIX + (process.env.HEAVY_TOOL ?? "ragmir-research");
++const FAST_TOOL = PREFIX + (process.env.FAST_TOOL ?? "ragmir-list-projects");
++
++async function call(tool, args, timeoutMs) {
++  const body = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: tool, arguments: args } };
++  if (timeoutMs !== undefined) body.timeoutMs = timeoutMs;
++  const startedAt = Date.now();
++  const response = await fetch(`${base}/${gatewayPublicId}`, {
++    method: "POST",
++    headers: { "content-type": "application/json", authorization: authHeader },
++    body: JSON.stringify(body),
++  });
++  const payload = await response.json().catch(() => null);
++  return {
++    status: response.status,
++    elapsedMs: Date.now() - startedAt,
++    reasonCode: payload?.error?.data?.reasonCode ?? null,
++    message: payload?.error?.message ?? null,
++    isError: payload?.result?.isError ?? null,
++  };
++}
++
++const slowArgs = { project: "experience-records", query: "SYN-813 timeout probe", topK: 5 };
++const heavyArgs = { project: process.env.HEAVY_PROJECT ?? "experience-records", query: "MCP gateway timeout behaviour SYN-813", topK: Number(process.env.HEAVY_TOPK ?? 10) };
++
++console.log(`[${phase}] gateway ${base}/${gatewayPublicId}`);
++console.log(`[${phase}] fast timeoutMs=300    `, JSON.stringify(await call(FAST_TOOL, {}, 300)));
++console.log(`[${phase}] fast timeoutMs=60000  `, JSON.stringify(await call(FAST_TOOL, {}, 60_000)));
++console.log(`[${phase}] fast no timeout       `, JSON.stringify(await call(FAST_TOOL, {}, undefined)));
++console.log(`[${phase}] heavy timeoutMs=300   `, JSON.stringify(await call(HEAVY_TOOL, heavyArgs, 300)));
++console.log(`[${phase}] heavy timeoutMs=60000 `, JSON.stringify(await call(HEAVY_TOOL, heavyArgs, 60_000)));
++console.log(`[${phase}] heavy no timeout      `, JSON.stringify(await call(HEAVY_TOOL, heavyArgs, undefined)));
++console.log(`[${phase}] slow timeoutMs=300    `, JSON.stringify(await call(SLOW_TOOL, slowArgs, 300)));
++console.log(`[${phase}] slow timeoutMs=60000  `, JSON.stringify(await call(SLOW_TOOL, slowArgs, 60_000)));
++console.log(`[${phase}] slow no timeout       `, JSON.stringify(await call(SLOW_TOOL, slowArgs, undefined)));
++
++if (process.env.HUNT_OVER_10S === "1") {
++  for (let attempt = 1; attempt <= Number(process.env.HUNT_ATTEMPTS ?? 4); attempt++) {
++    const outcome = await call(HEAVY_TOOL, heavyArgs, 60_000);
++    console.log(`[${phase}] hunt ${attempt} heavy timeoutMs=60000`, JSON.stringify(outcome));
++    if (outcome.elapsedMs > 12_000) {
++      const withoutTimeout = await call(HEAVY_TOOL, heavyArgs, undefined);
++      console.log(`[${phase}] hunt ${attempt} heavy no timeout      `, JSON.stringify(withoutTimeout));
++      break;
++    }
++  }
++}
++
++if (listener) await new Promise((resolve) => listener.close(resolve));
++await db.$client.end({ timeout: 5 });
++process.exit(0);
+diff --git a/patches/syndicate/server/2026.1117.0/mcp-tools-call-timeout/test-mcp-tools-call-timeout.mjs b/patches/syndicate/server/2026.1117.0/mcp-tools-call-timeout/test-mcp-tools-call-timeout.mjs
+new file mode 100644
+index 000000000..890b01e10
+--- /dev/null
++++ b/patches/syndicate/server/2026.1117.0/mcp-tools-call-timeout/test-mcp-tools-call-timeout.mjs
+@@ -0,0 +1,118 @@
++// Focused check for the SYN-813 patch: the MCP-protocol route must pass the
++// caller's timeout into executeTool, and a connection must be able to agree a
++// longer budget for its own tools.
++//
++// Run: node --test test-mcp-tools-call-timeout.mjs
++// The dist under test is taken from PAPERCLIP_SERVER_DIST (default: the active
++// @paperclipai/server install).
++import test from "node:test";
++import assert from "node:assert/strict";
++import { realpath } from "node:fs/promises";
++import { createRequire } from "node:module";
++import path from "node:path";
++
++const require = createRequire(import.meta.url);
++
++async function serverDist() {
++  if (process.env.PAPERCLIP_SERVER_DIST)
++    return process.env.PAPERCLIP_SERVER_DIST;
++  const cliRoot = "/root/.paperclip/cli/current/node_modules/@paperclipai/server";
++  return path.join(await realpath(cliRoot), "dist");
++}
++
++const dist = await serverDist();
++const serverRequire = createRequire(path.join(dist, "..", "package.json"));
++const express = serverRequire("express");
++const { mcpGatewayProtocolRoutes } = await import(path.join(dist, "routes", "tool-gateway.js"));
++const serviceModule = await import(path.join(dist, "services", "tool-gateway.js"));
++const connectionToolTimeoutMs = serviceModule.connectionToolTimeoutMs;
++
++async function withGateway(gateway, run) {
++  const app = express();
++  app.use(express.json());
++  app.use(mcpGatewayProtocolRoutes(gateway));
++  const server = await new Promise((resolve) => {
++    const listener = app.listen(0, "127.0.0.1", () => resolve(listener));
++  });
++  try {
++    const { port } = server.address();
++    await run(`http://127.0.0.1:${port}/mcp/gateways/gw_test`);
++  }
++  finally {
++    await new Promise((resolve) => server.close(resolve));
++  }
++}
++
++async function callMcpTools(url, body) {
++  const response = await fetch(url, {
++    method: "POST",
++    headers: { "content-type": "application/json", authorization: "Bearer test-token" },
++    body: JSON.stringify(body),
++  });
++  return { status: response.status, payload: await response.json() };
++}
++
++test("MCP tools/call passes the caller's timeout into executeTool", async () => {
++  const received = [];
++  await withGateway({
++    executeTool: async (input) => {
++      received.push(input);
++      return { result: { content: "ok", data: { ok: true } } };
++    },
++  }, async (url) => {
++    const { status, payload } = await callMcpTools(url, {
++      jsonrpc: "2.0",
++      id: 1,
++      method: "tools/call",
++      params: { name: "slow_tool", arguments: { a: 1 } },
++      timeoutMs: 60_000,
++    });
++    assert.equal(status, 200);
++    assert.equal(payload.result.isError, false);
++    assert.equal(received.length, 1);
++    assert.equal(received[0].timeoutMs, 60_000);
++    assert.equal(received[0].tool, "slow_tool");
++    assert.deepEqual(received[0].parameters, { a: 1 });
++  });
++});
++
++test("MCP tools/call without a timeout keeps the default path", async () => {
++  const received = [];
++  await withGateway({
++    executeTool: async (input) => {
++      received.push(input);
++      return { result: { content: "ok", data: { ok: true } } };
++    },
++  }, async (url) => {
++    const { status } = await callMcpTools(url, {
++      jsonrpc: "2.0",
++      id: 2,
++      method: "tools/call",
++      params: { name: "quick_tool", arguments: {} },
++    });
++    assert.equal(status, 200);
++    assert.equal(received.length, 1);
++    assert.equal(received[0].timeoutMs, undefined);
++  });
++});
++
++test("a connection agrees a longer budget for its own tools", () => {
++  assert.equal(typeof connectionToolTimeoutMs, "function", "patched service must export connectionToolTimeoutMs");
++  assert.equal(connectionToolTimeoutMs({ config: { toolTimeoutMs: 60_000 } }, {}), 60_000);
++  assert.equal(connectionToolTimeoutMs({ config: { toolTimeoutMs: 15_000 } }, {}), 15_000);
++});
++
++test("without a configured budget the default path is unchanged", () => {
++  assert.equal(connectionToolTimeoutMs({ config: {} }, {}), undefined);
++  assert.equal(connectionToolTimeoutMs({ config: { templateId: "x" } }, {}), undefined);
++  assert.equal(connectionToolTimeoutMs({}, {}), undefined);
++  assert.equal(connectionToolTimeoutMs(undefined, {}), undefined);
++});
++
++test("a configured budget is clamped to the gateway ceiling", () => {
++  assert.equal(connectionToolTimeoutMs({ config: { toolTimeoutMs: 999_999 } }, {}), 60_000);
++  assert.equal(connectionToolTimeoutMs({ config: { toolTimeoutMs: 0 } }, {}), 1);
++  assert.equal(connectionToolTimeoutMs({ config: { toolTimeoutMs: -5 } }, {}), 1);
++  assert.equal(connectionToolTimeoutMs({ config: { toolTimeoutMs: "60000" } }, {}), undefined);
++  assert.equal(connectionToolTimeoutMs({ config: { toolTimeoutMs: Number.NaN } }, {}), undefined);
++});
+diff --git a/patches/syndicate/server/2026.1117.0/question-answer-resume/PATCH-MANIFEST.txt b/patches/syndicate/server/2026.1117.0/question-answer-resume/PATCH-MANIFEST.txt
+new file mode 100644
+index 000000000..cab3a23f7
+--- /dev/null
++++ b/patches/syndicate/server/2026.1117.0/question-answer-resume/PATCH-MANIFEST.txt
+@@ -0,0 +1,135 @@
++source_release   @paperclipai/server 2026.1117.0
++pristine_dist    /root/.paperclip/cli/installs/npm/2026.1117.0/node_modules/@paperclipai/server/dist
++patched_files    dist/services/issue-thread-interactions.js
++issue            SYN-761, SYN-788
++example_task     SYN-731 (interaction 42a53861-2329-4dad-b895-a47cb5276b44, answered
++                 by the board user 2026-11-21T11:55:24Z)
++fix              A human answer to an `ask_user_questions` interaction did not resume
++                 the agent. The answer path never handed the task back, and the
++                 question response delivery aborted with
++                 `question_response_target_unavailable` because the task had no agent
++                 assignee: an in_review task under a human review stage is assigned to
++                 the human (`assignee_agent_id = NULL`, `assignee_user_id = <user>`),
++                 so the delivery found no wake target and the task stopped.
++                 Delivery row evidence (live DB):
++                   issue_question_response_deliveries.delivery_id 31bb24aa-1d6c-41ba-aab9-ad80a7b5b2d3
++                   status=failed, delivery_mode=NULL, target_run_id=NULL,
++                   last_error_code=question_response_target_unavailable
++change           In `answerQuestions` (services/issue-thread-interactions.js) the
++                 answer transaction now hands the task back to the agent that asked
++                 the question before the delivery row is queued:
++                   - the locked issue row also selects assignee_agent_id/assignee_user_id
++                   - when a human answered, the interaction has a created_by_agent_id,
++                     the task has no agent assignee but a human assignee, and the task
++                     is in_review or in_progress: issue.assignee_agent_id =
++                     interaction.created_by_agent_id, issue.assignee_user_id = NULL
++                     (status is NOT changed)
++                   - activity publications of that update are published after the
++                     transaction commits
++                 This mirrors the existing confirmation-accept path
++                 (`shouldReturnIssueToCreatorOnAccept` + `issueService(db).update`),
++                 which already returns a task to the interaction creator. The status is
++                 left alone on purpose: the continuation auto-checkout in
++                 services/heartbeat.js claims only in_progress/in_review tasks, so
++                 moving the task to `todo` would make the continuation run stale and
++                 cancel it.
++change2          SYN-788: the SYN-761 hand-back stopped at the assignee. A task
++                 parked under a human review stage keeps that stage participant in
++                 `executionState`, and the run-dispatch gate
++                 (`modules/run-dispatch/domain/policy.js` ->
++                 `decideReviewParticipant`) refuses to start the resumed agent run
++                 while another principal holds the task: the queued continuation run
++                 was cancelled with `issue_review_participant_changed`
++                 (live evidence, SYN-782, 2026-11-22T20:00:33Z:
++                 paperclip.service log "claimQueuedRun: withheld queued run at the
++                 execution gate", runId 6bfb3c2c-027a-42dd-be98-e39f588abfb9).
++                 The same task then bounces back to the human on the agent's next
++                 PATCH: the execution-policy transition sees assignee != stage
++                 participant (`stageStateDrifted`) and re-pends the stage to the
++                 human. The hand-back therefore also releases the stage hold, the
++                 way a changes-requested decision does:
++                   - the locked issue row also selects execution_state
++                   - when the stage holds the task (status in_review, executionState
++                     status pending, participant is not the asking agent):
++                     status -> in_progress, executionState.status ->
++                     "changes_requested" (stage id, stage type, participant,
++                     returnAssignee and completedStageIds are preserved for the next
++                     round), lastDecisionOutcome -> null, changesRequestedCount -> 0
++                   - a task without a stage hold keeps the SYN-761 behaviour
++                     (assignee only)
++                 The released state passes the gate and the continuation checkout
++                 (`services/heartbeat.js` -> `shouldAutoCheckoutIssueForWake`
++                 refuses a pending executionState).
++marker           A human answer must also release the review stage hold.
++upstream         not fixed upstream at v2026.1117.0 (master == v2026.1117.0 for
++                 services/question-response-delivery.ts and
++                 services/issue-thread-interactions.ts, checked 2026-11-21)
++verification     (1) patch -p1 --batch applies cleanly to a pristine 2026.1117.0 dist
++                     copy; node --check services/issue-thread-interactions.js -> OK
++                 (2) marker present exactly once in the patched file
++                 (2b) SYN-788, 2026-11-22: the regenerated artifact
++                     (pristine -> patched) reproduces the live dist byte for byte,
++                     and the gate check against the platform's own
++                     `decideQueuedRunStaleness` shows the pre-fix state
++                     (in_review + pending human stage) is cancelled with
++                     `issue_review_participant_changed` while the released state
++                     (in_progress + changes_requested stage) is allowed
++                 (3) live end-to-end check after the server restart, 2026-11-21:
++                     paperclip.service restarted 13:09:01Z with the patched dist
++                     (ExecStartPre reported "patch already in place — no-op").
++                     Two agent-created ask_user_questions cards on human-assigned
++                     scratch tasks were answered through the real HTTP endpoint
++                     POST /issues/:id/interactions/:interactionId/respond as the
++                     board user:
++                       SYN-763 (status in_progress, assignee_agent_id NULL,
++                         assignee_user_id = board) -> interaction
++                         62a742b1-06c5-425b-9a8a-db700ebdc2a1 answered; issue
++                         assignee_agent_id = the asking agent, assignee_user_id = NULL,
++                         status unchanged (in_progress); delivery row status =
++                         fallback_queued, delivery_mode = wake_fallback, target_run_id =
++                         904f5e99-2915-4222-a9d7-da1e7192b3a2, last_error_code = NULL;
++                         wake request idempotency_key =
++                         question-response:62a742b1-... status claimed; the
++                         continuation run started with context_snapshot
++                         interactionStatus=answered, source=issue.interaction.respond.
++                       SYN-764 (status in_review, assignee_agent_id NULL,
++                         assignee_user_id = board) -> interaction
++                         a0182abb-0daf-4e78-a55e-061f3526bf95 answered; issue
++                         assignee_agent_id = the asking agent, assignee_user_id = NULL;
++                         delivery row status = fallback_queued, delivery_mode =
++                         wake_fallback, target_run_id =
++                         07bc4258-14ce-4fb3-af0b-65fc8231f65e, last_error_code = NULL.
++                     Negative control SYN-765: a board-created card
++                     (created_by_agent_id NULL) on the same human-assigned state was
++                     answered and the issue stayed human-assigned (assignee_agent_id
++                     still NULL) - the handoff only fires for agent-created cards.
++                     Pre-patch failure scope for the same error code:
++                     44 delivery rows with last_error_code =
++                     question_response_target_unavailable between 2026-10-03 and
++                     2026-11-21.
++reapply          /usr/local/bin/paperclip-server-question-answer-resume-patch.sh
++                 (no-op when the marker is present; refuses to act on a version with
++                 no stored build). Wired as ExecStartPre of paperclip.service.
++                 The boot script marker was switched to the SYN-788 marker so that
++                 the extended patch is re-applied after `paperclipai update`.
++backup           /var/backups/paperclip-server-pre-question-answer-resume-patch/
++notes            Applied in-place to the installed dist file. The server was restarted
++                 at 2026-11-21T13:09:01Z, so the patched module is live. Verified
++                 end-to-end after that restart (see verification).
++built_at         2026-11-21T12:30:00Z (SYN-788 rebuild: 2026-11-22T20:30:00Z)
++verified_at      2026-11-21T13:50:00Z (SYN-788 artifact+gate check: 2026-11-22T20:32:00Z)
++
++notes2           SYN-788 live deployment: the patched dist is on disk; the running
++                 process still holds the old module, so the restart is scheduled as
++                 the transient unit `paperclip-restart-when-idle-syn788`
++                 (systemd-run --unit=paperclip-restart-when-idle-syn788
++                 /usr/local/bin/paperclip-restart-when-idle.sh --max-wait 14400):
++                 it waits until the company reports no running agent and then
++                 restarts paperclip.service once. A direct restart would kill every
++                 live agent run, including the run that issues it.
++                 The already-answered SYN-782 card cannot be answered twice, so its
++                 task was released through the platform's own transition with the
++                 board credential (PATCH status=in_progress + comment): executionState
++                 became changes_requested with the review stage preserved, and the
++                 continuation run 73edcbc0-7469-46d7-80fe-b66acf88b783 started
++                 (status running, no error code).
+diff --git a/patches/syndicate/server/2026.1117.0/question-answer-resume/SOURCE-question-answer-resume.patch b/patches/syndicate/server/2026.1117.0/question-answer-resume/SOURCE-question-answer-resume.patch
+new file mode 100644
+index 000000000..d7ec7a4df
+--- /dev/null
++++ b/patches/syndicate/server/2026.1117.0/question-answer-resume/SOURCE-question-answer-resume.patch
+@@ -0,0 +1,81 @@
++--- a/services/issue-thread-interactions.js
+++++ b/services/issue-thread-interactions.js
++@@ -31,6 +31,7 @@
++ import { evaluateAgentInvokabilityFromDb } from "./agent-invokability.js";
++ import { getNativeReviewAssignment } from "./native-runtime/native-review-participant.js";
++ import { assertIssueReviewVerdictActorAllowed, isIssueReviewVerdictInteraction, } from "./issue-review-policy.js";
+++import { parseIssueExecutionState } from "./issue-execution-policy.js";
++ import { issueService, executeIssuePostCommitActions, ensureAssignmentIssueAccessGrant, readAcceptedPlanConfirmationTarget, runWorkspaceIsFinalized, } from "./issues.js";
++ import { questionResponseDeliveryValues } from "./question-response-delivery.js";
++ import { lockAcceptedChatHandoffSource } from "./chat-completion-delivery.js";
++@@ -3960,10 +3961,11 @@
++                     throw unprocessable(error instanceof Error ? error.message : "Invalid question response", { code: "invalid_question_response" });
++                 }
++             }
+++            const postCommitActivityPublications = [];
++             const updated = await db.transaction(async (tx) => {
++                 // Serialize against task completion/cancellation and use the persisted
++                 // status, including when the caller read the task before it closed.
++-                const [issueRow] = await tx.select({ status: issues.status }).from(issues)
+++                const [issueRow] = await tx.select({ status: issues.status, assigneeAgentId: issues.assigneeAgentId, assigneeUserId: issues.assigneeUserId, executionState: issues.executionState }).from(issues)
++                     .where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId))).for("update");
++                 if (!issueRow)
++                     throw interactionNotFoundError();
++@@ -4000,6 +4002,48 @@
++                 if (!row)
++                     throw interactionAlreadyResolvedError();
++                 const answered = hydrateInteraction(row);
+++                // A human answer must resume the agent that asked. While the task sits
+++                // with a human reviewer it has no agent assignee, so the question
+++                // response delivery finds no wake target and the task stops. Hand the
+++                // task back to the asking agent first, exactly like the confirmation
+++                // accept path does. The task keeps its status unless a review stage
+++                // holds it (see below): the continuation checkout only claims
+++                // in_progress/in_review tasks.
+++                if (!historicalAnswer &&
+++                    actor.userId &&
+++                    current.createdByAgentId &&
+++                    !issueRow.assigneeAgentId &&
+++                    issueRow.assigneeUserId &&
+++                    (issueRow.status === "in_review" || issueRow.status === "in_progress")) {
+++                    // A human answer must also release the review stage hold. A task
+++                    // parked under a review stage keeps that stage participant in
+++                    // executionState, and the run-dispatch gate refuses to start the
+++                    // resumed agent run while another principal holds the task
+++                    // (issue_review_participant_changed). Release the hold the way a
+++                    // changes-requested decision does: the stage stays pending for the
+++                    // next round, the task goes back to the agent.
+++                    const executionState = parseIssueExecutionState(issueRow.executionState);
+++                    const stageHoldsTask = issueRow.status === "in_review" &&
+++                        executionState?.status === "pending" &&
+++                        executionState.currentParticipant !== null &&
+++                        !(executionState.currentParticipant.type === "agent" &&
+++                            executionState.currentParticipant.agentId === current.createdByAgentId);
+++                    await issueService(db).update(issue.id, {
+++                        assigneeAgentId: current.createdByAgentId,
+++                        assigneeUserId: null,
+++                        ...(stageHoldsTask ? {
+++                            status: "in_progress",
+++                            executionState: {
+++                                ...executionState,
+++                                status: "changes_requested",
+++                                lastDecisionOutcome: null,
+++                                changesRequestedCount: 0,
+++                            },
+++                        } : {}),
+++                        actorAgentId: actor.agentId ?? null,
+++                        actorUserId: actor.userId ?? null,
+++                    }, tx, postCommitActivityPublications);
+++                }
++                 // This answer updates conversation history only. It must not resume
++                 // the completed source run or enqueue new work for the closed task.
++                 if (!historicalAnswer) {
++@@ -4018,6 +4062,8 @@
++                 return row;
++             });
++             await touchIssue(db, issue.id, issue.companyId);
+++            for (const publication of postCommitActivityPublications)
+++                publishActivity(publication);
++             const answered = hydrateInteraction(updated);
++             await emitInteractionResolvedTelemetry(db, answered);
++             return answered;
+diff --git a/patches/syndicate/server/2026.1117.0/task-session-keep-on-reassignment/PATCH-MANIFEST.txt b/patches/syndicate/server/2026.1117.0/task-session-keep-on-reassignment/PATCH-MANIFEST.txt
+new file mode 100644
+index 000000000..a8de8b8c7
+--- /dev/null
++++ b/patches/syndicate/server/2026.1117.0/task-session-keep-on-reassignment/PATCH-MANIFEST.txt
+@@ -0,0 +1,95 @@
++task-session-keep-on-reassignment server patch — @paperclipai/server 2026.1117.0
++==============================================================================
++
++source_release   @paperclipai/server 2026.1117.0
++pristine_dist    /root/.paperclip/cli/installs/npm/2026.1117.0/node_modules/@paperclipai/server/dist
++patched_files    dist/services/heartbeat/session-preparation.js
++issue            SYN-792
++
++What this fixes
++---------------
++Paperclip restarts the agent's OpenCode session on most wakes, and OpenCode
++generates the session title once per session — so every restart costs one extra
++"small" request. The dominant reset reason on this instance is the wake reason
++`issue_assigned`: a human reply on a task that was parked in review (the task is
++assigned to the human while it waits) hands the task back to the agent, and the
++server reports that hand-back as an assignment. `shouldResetTaskSessionForWake`
++resets the task session for `issue_assigned`, so the OpenCode session — and its
++title — restarted on every human reply.
++
++Measured on this instance (run logs, /root/.paperclip/instances/default/data/run-logs):
++  "Skipping saved session resume for task ... because wake reason is issue_assigned"
++  242 occurrences — every other reset reason is a real config change
++  (83 adapter/adapter-config/secrets, 27 forceFreshSession, 25 instructions,
++  13 model changes, ...).
++Example: SYN-341 (db0ce455), two comment wakes 9 minutes apart produced two
++different OpenCode sessions (ses_e0b303816 -> ses_e0b28bbd6); opencode.log
++shows exactly one title call per session (290 of 340 sessions have one).
++
++Change
++------
++In prepareHeartbeatSession (services/heartbeat/session-preparation.js) the
++`issue_assigned` reset no longer applies when the task already carries a
++session:
++
++    const reassignedTaskWithSession = taskSession != null &&
++        readNonEmptyString(context.wakeReason) === "issue_assigned" &&
++        context.forceFreshSession !== true;
++    const resetTaskSession = context.workspaceSelectionChanged === true ||
++        (shouldResetTaskSessionForWake(context) && !reassignedTaskWithSession) ||
++        sessionConfigFreshness.reset;
++
++Scope of the exemption:
++  * first assignment of a task to an agent (no task session yet) -> unchanged,
++    the session still starts clean;
++  * a task that already has a session -> the session is kept and OpenCode
++    resumes it, so no second title generation;
++  * forceFreshSession, a changed model, a changed adapter/instructions/
++    workspace config, and workspaceSelectionChanged still reset the session;
++  * other wake reasons (issue_commented, execution_approval_requested, ...)
++    are untouched — only `issue_assigned` is exempted.
++
++marker           A human reply on a task parked in review hands the task back to the agent
++upstream         not fixed upstream at v2026.1117.0 (checked 2026-11-23)
++verification     (1) node --check session-preparation.js -> OK
++                 (2) patch -p1 --batch applies cleanly to a pristine
++                     2026.1117.0 dist copy and reproduces this artifact
++                     byte-for-byte
++                 (3) focused check: the real shouldResetTaskSessionForWake()
++                     from run-state.js combined with the patched condition
++                     yields reset=false for (task session present, wake reason
++                     issue_assigned), reset=true for (no task session) and
++                     reset=true for (forceFreshSession)
++                 (4) live end-to-end check pending: a human reply on a task
++                     parked in review must resume the OpenCode session
++                     (no new session id, no second title call in
++                     /root/.local/share/opencode/log/opencode.log)
++reapply          /usr/local/bin/paperclip-server-task-session-keep-patch.sh
++                 (no-op when the marker is present; refuses to act on a version
++                 with no stored build). Wired as ExecStartPre of paperclip.service.
++backup           /var/backups/paperclip-server-pre-task-session-keep/
++notes            The server dist is loaded at process start, so the patch goes
++                 live on the next paperclip.service restart. The restart is
++                 scheduled with the idle-wait helper
++                 (/usr/local/bin/paperclip-restart-when-idle.sh) because a
++                 direct restart kills every live agent run.
++built_at         2026-11-23T06:12:00Z
++verified_at      2026-11-23T06:14:00Z
++
++post-restart self-check — SYN-827 F-2 mirror (added 2026-11-23)
++----------------------------------------------------------------
++This patch (B, task-session keep) and the adapter small_model patch (A) go live together on the same restart, and A's effect depends on the unit carrying NO uncommented Environment=PAPERCLIP_OPENCODE_SMALL_MODEL= line (an operator pin silently overrides A's session-model default; see /opt/paperclip-adapter-patch/small-model-session-2026.1117.0/PATCH-MANIFEST.txt "ENV-pin guard" section and the assertion wired into /usr/local/bin/paperclip-adapter-small-model-session-patch.sh, which warns loudly — exit stays 0 — when pin+marker coexist). After EVERY paperclip.service restart run this read-only block; expected green = no active pin + both markers OK:
++    UNIT=/etc/systemd/system/paperclip.service
++    ADAPT=$(readlink -f /root/.paperclip/cli/current/node_modules/@paperclipai/adapter-opencode-local)/dist/server/runtime-config.js
++    SRV=$(readlink -f /root/.paperclip/cli/current/node_modules/@paperclipai/server)/dist/services/heartbeat/session-preparation.js
++    awk '/^[[:space:]]*#/{next} /^[[:space:]]*Environment=/ && /PAPERCLIP_OPENCODE_SMALL_MODEL=/{print}' "$UNIT" \
++        | grep -q . && echo "PIN PRESENT -> adapter patch A effect overridden by operator pin" || echo "no active operator pin — good"
++    grep -qF 'Set OpenCode small_model to the session model' "$ADAPT" && echo "adapter marker OK" || echo "adapter marker MISSING"
++    grep -qF 'A human reply on a task parked in review hands the task back to the agent' "$SRV" && echo "server marker OK" || echo "server marker MISSING"
++Any other result means a dist file drifted from these artifacts or an operator ENV-pin has returned; re-run /tmp/syn827-sbx acceptance (/usr/local/bin copy of run_acceptance_v2 semantics) before trusting title-gen/session-resume behaviour.
++
++sha256 (must match files on disk; regenerate with sha256sum after any sanctioned change)
++reapply_script_sha256=99571e5a35ff38e8b0ab8a2fd4056e59ac7f77cfea30076f757307cd474ff2db
++dist_artifact_sha256=c11c5d37c8108388a5a052b63be1698bc8e6f9263b2677cbaeffa7b05db4947d
++source_patch_sha256=53dc393199eced61141e2f67ecf2dcf582c1f910cd16ee5192b21c433b679829
++updated_at       2026-11-23T22:58:04Z SYN-827 F-2 post-restart self-check + sha fields added for symmetry with the adapter manifest; SOURCE/dist untouched, byte-reproducibility chain re-verified pristine->SOURCE==artifact==live with node --check clean. Rollback of this manifest edit only: restore /var/backups/syn827-pre-env-pin-guard/<ts>/server-PATCH-MANIFEST.txt. Script rollback path unchanged: snapshot per apply under /var/backups/paperclip-server-pre-task-session-keep/ plus this pre-edit backup copy.
+diff --git a/patches/syndicate/server/2026.1117.0/task-session-keep-on-reassignment/SOURCE-task-session-keep-on-reassignment.patch b/patches/syndicate/server/2026.1117.0/task-session-keep-on-reassignment/SOURCE-task-session-keep-on-reassignment.patch
+new file mode 100644
+index 000000000..a84193b84
+--- /dev/null
++++ b/patches/syndicate/server/2026.1117.0/task-session-keep-on-reassignment/SOURCE-task-session-keep-on-reassignment.patch
+@@ -0,0 +1,21 @@
++--- a/services/heartbeat/session-preparation.js
+++++ b/services/heartbeat/session-preparation.js
++@@ -125,7 +125,17 @@
++         wakeResetReason: wakeSessionResetReason,
++         preserveLegacySessionWithoutConfigMetadata: acceptedPlanContinuationWake && !acceptedPlanWakeRoutingDecision && !agentIdentity,
++     });
++-    const resetTaskSession = context.workspaceSelectionChanged === true || shouldResetTaskSessionForWake(context) || sessionConfigFreshness.reset;
+++    // A human reply on a task parked in review hands the task back to the agent,
+++    // which the server reports as `issue_assigned`. Resetting the task session
+++    // there restarted OpenCode — and its session-title generation — on every
+++    // reply. A task that already carries a session keeps it; a first assignment
+++    // (no session yet) still starts clean.
+++    const reassignedTaskWithSession = taskSession != null &&
+++        readNonEmptyString(context.wakeReason) === "issue_assigned" &&
+++        context.forceFreshSession !== true;
+++    const resetTaskSession = context.workspaceSelectionChanged === true ||
+++        (shouldResetTaskSessionForWake(context) && !reassignedTaskWithSession) ||
+++        sessionConfigFreshness.reset;
++     const sessionResetReason = sessionConfigFreshness.reasons.join("; ") || null;
++     const taskSessionForRun = resetTaskSession ? null : taskSession;
++     const getFreshSessionHandoff = issueRef ? createNativeSessionHandoffLoader({
+diff --git a/patches/syndicate/server/2026.1117.0/task-session-keep-on-reassignment/session-preparation.js b/patches/syndicate/server/2026.1117.0/task-session-keep-on-reassignment/session-preparation.js
+new file mode 100644
+index 000000000..2b3f7dc20
+--- /dev/null
++++ b/patches/syndicate/server/2026.1117.0/task-session-keep-on-reassignment/session-preparation.js
+@@ -0,0 +1,270 @@
++import { and, desc, eq } from "drizzle-orm";
++import { agentConfigRevisions } from "@paperclipai/db";
++import { getServerAdapter } from "../../adapters/index.js";
++import { aiConnectionSessionCompatibilityInputs, managedAiSessionIdentityCompatible } from "../ai-connection-session.js";
++import { createNativeSessionHandoffLoader } from "../native-runtime/native-session-handoff.js";
++import { agentInstructionsService } from "../agent-instructions.js";
++import { describeSessionResetReason, shouldResetTaskSessionForWake, isCanonicalSessionIdForAdapter, normalizeResumeParamsForAdapter, normalizeSessionParams, requiresCanonicalSessionIds, truncateDisplayId, } from "./run-state.js";
++import { buildEffectiveRunSessionConfigMetadata, readConfigFingerprintFromSessionParams, readConfiguredModelFromAdapterConfig, resolveTaskSessionConfigFreshness, stripPaperclipSessionMetadataFromSessionParams, } from "./workspaces.js";
++function readNonEmptyString(value) {
++    return typeof value === "string" && value.trim().length > 0 ? value : null;
++}
++/** Selects a resumable session before workspace preparation; acquires no runtime resources. */
++export async function prepareHeartbeatSession(db, input) {
++    const { run, agent, getLatestAgentConfigRevision } = input;
++    const { context, issueRef, issueContext, taskProjectContext, workspaceProjectContext, wakeCommentId, acceptedPlanContinuationWake, acceptedPlanWakeRoutingDecision } = input.task;
++    const { taskSession, taskSessionDecodedParams, explicitResumeSessionParams, explicitResumeSessionDisplayId, sessionCodec } = input.session;
++    const { runtimeConfig, agentIdentity, issueAssigneeOverrides, originalAiIssueOverrides, managedAiRuntime, aiBinding, requestedAiBinding, secretManifest, runtimeSkillEntries, routineEnvContext } = input.config;
++    const { requestedExecutionWorkspaceMode, effectiveExecutionWorkspaceMode, projectExecutionWorkspacePolicy, issueExecutionWorkspaceSettings, executionPolicy, requestedReusableExecutionWorkspaceConfig, reusableExistingExecutionWorkspace } = input.workspace;
++    const { environmentResolution, selectedEnvironmentId, selectedEnvironmentForConfig } = input.environment;
++    const latestAgentConfigRevision = await getLatestAgentConfigRevision(agent.companyId, agent.id);
++    const sessionConfigMetadataInput = {
++        agentIdentityKeyId: agentIdentity?.keyId,
++        adapterType: agent.adapterType,
++        effectiveAdapterConfig: runtimeConfig,
++        managedInstructions: await agentInstructionsService(db).getManagedEntryFingerprint({ ...agent, adapterConfig: runtimeConfig }),
++        managedAiHome: managedAiRuntime?.home,
++        agentRuntimeConfig: agent.runtimeConfig,
++        issueOverrides: issueAssigneeOverrides,
++        workspaceConfig: {
++            requestedMode: requestedExecutionWorkspaceMode,
++            effectiveMode: effectiveExecutionWorkspaceMode,
++            issueConfigRevisionAt: issueContext?.updatedAt instanceof Date
++                ? issueContext.updatedAt.toISOString()
++                : (issueContext?.updatedAt ?? null),
++            projectConfigRevisionAt: workspaceProjectContext?.updatedAt instanceof Date
++                ? workspaceProjectContext.updatedAt.toISOString()
++                : (workspaceProjectContext?.updatedAt ?? null),
++            projectPolicy: projectExecutionWorkspacePolicy,
++            issueSettings: issueExecutionWorkspaceSettings,
++            reusableExecutionWorkspaceConfig: requestedReusableExecutionWorkspaceConfig,
++            existingExecutionWorkspace: reusableExistingExecutionWorkspace
++                ? {
++                    id: reusableExistingExecutionWorkspace.id,
++                    mode: reusableExistingExecutionWorkspace.mode,
++                    strategyType: reusableExistingExecutionWorkspace.strategyType,
++                    projectWorkspaceId: reusableExistingExecutionWorkspace.projectWorkspaceId,
++                    repoUrl: reusableExistingExecutionWorkspace.repoUrl,
++                    baseRef: reusableExistingExecutionWorkspace.baseRef,
++                    branchName: reusableExistingExecutionWorkspace.branchName,
++                    config: reusableExistingExecutionWorkspace.config,
++                }
++                : null,
++        },
++        environment: {
++            selectionSource: environmentResolution.source,
++            selectedEnvironmentId,
++            selectedEnvironment: selectedEnvironmentForConfig
++                ? {
++                    id: selectedEnvironmentForConfig.id,
++                    driver: selectedEnvironmentForConfig.driver,
++                    config: selectedEnvironmentForConfig.config,
++                    configRevisionAt: selectedEnvironmentForConfig.updatedAt instanceof Date
++                        ? selectedEnvironmentForConfig.updatedAt.toISOString()
++                        : (selectedEnvironmentForConfig.updatedAt ?? null),
++                }
++                : null,
++            executionPolicy,
++        },
++        environmentEnv: selectedEnvironmentForConfig?.envVars ?? null,
++        projectEnv: taskProjectContext?.env ?? null,
++        routineEnv: routineEnvContext.env,
++        secretManifest,
++        runtimeSkills: runtimeSkillEntries,
++        agentConfigRevision: latestAgentConfigRevision
++            ? {
++                id: latestAgentConfigRevision.id,
++                changedKeys: latestAgentConfigRevision.changedKeys,
++                configRevisionAt: latestAgentConfigRevision.createdAt.toISOString(),
++            }
++            : null,
++    };
++    const sessionConfigMetadata = await buildEffectiveRunSessionConfigMetadata(sessionConfigMetadataInput);
++    const compatibleConfigMetadata = [];
++    const importedManagedInstructions = Boolean(taskSession && sessionConfigMetadataInput.managedInstructions?.contentHash
++        && readConfigFingerprintFromSessionParams(taskSession.sessionParamsJson)?.fingerprint !== sessionConfigMetadata.fingerprint);
++    if (importedManagedInstructions) {
++        compatibleConfigMetadata.push(await buildEffectiveRunSessionConfigMetadata({
++            ...sessionConfigMetadataInput, retainManagedInstructionPaths: true,
++        }));
++    }
++    if (managedAiRuntime && aiBinding && taskSession &&
++        readConfigFingerprintFromSessionParams(taskSession.sessionParamsJson)?.fingerprint !== sessionConfigMetadata.fingerprint) {
++        const revisions = requestedAiBinding?.mode === "router"
++            ? await db.select().from(agentConfigRevisions).where(and(eq(agentConfigRevisions.companyId, agent.companyId), eq(agentConfigRevisions.agentId, agent.id))).orderBy(desc(agentConfigRevisions.createdAt), desc(agentConfigRevisions.id)).limit(21)
++            : [];
++        const candidates = aiConnectionSessionCompatibilityInputs({
++            effectiveAdapterConfig: runtimeConfig, agentRuntimeConfig: agent.runtimeConfig,
++            agentConfigRevision: sessionConfigMetadataInput.agentConfigRevision,
++            issueOverrides: issueAssigneeOverrides, originalIssueOverrides: originalAiIssueOverrides,
++            binding: aiBinding, router: requestedAiBinding?.mode === "router",
++            storedIdentity: taskSession.sessionParamsJson?.paperclipAiCredentialIdentity,
++            sessionIdentity: managedAiRuntime.sessionIdentity, credentialIdentity: managedAiRuntime.identity, revisions,
++        });
++        compatibleConfigMetadata.push(...await Promise.all(candidates.flatMap(candidate => [
++            buildEffectiveRunSessionConfigMetadata({ ...sessionConfigMetadataInput, ...candidate }),
++            ...(importedManagedInstructions ? [buildEffectiveRunSessionConfigMetadata({
++                    ...sessionConfigMetadataInput, ...candidate, retainManagedInstructionPaths: true,
++                })] : []),
++        ])));
++    }
++    const configuredModel = readConfiguredModelFromAdapterConfig(runtimeConfig);
++    if (context.refreshTools === true && agent.adapterType !== "paperclip_runner") {
++        const capability = getServerAdapter(agent.adapterType).supportsToolRefreshOnResume;
++        const canRefresh = typeof capability === "function" ? capability(runtimeConfig) : capability === true;
++        if (!canRefresh)
++            context.forceFreshSession = true;
++    }
++    const wakeSessionResetReason = describeSessionResetReason(context);
++    const sessionConfigFreshness = resolveTaskSessionConfigFreshness({
++        hasTaskSession: taskSession != null,
++        configuredModel,
++        taskSessionParams: taskSession?.sessionParamsJson ?? taskSessionDecodedParams,
++        configMetadata: sessionConfigMetadata,
++        compatibleConfigMetadata,
++        wakeResetReason: wakeSessionResetReason,
++        preserveLegacySessionWithoutConfigMetadata: acceptedPlanContinuationWake && !acceptedPlanWakeRoutingDecision && !agentIdentity,
++    });
++    // A human reply on a task parked in review hands the task back to the agent,
++    // which the server reports as `issue_assigned`. Resetting the task session
++    // there restarted OpenCode — and its session-title generation — on every
++    // reply. A task that already carries a session keeps it; a first assignment
++    // (no session yet) still starts clean.
++    const reassignedTaskWithSession = taskSession != null &&
++        readNonEmptyString(context.wakeReason) === "issue_assigned" &&
++        context.forceFreshSession !== true;
++    const resetTaskSession = context.workspaceSelectionChanged === true ||
++        (shouldResetTaskSessionForWake(context) && !reassignedTaskWithSession) ||
++        sessionConfigFreshness.reset;
++    const sessionResetReason = sessionConfigFreshness.reasons.join("; ") || null;
++    const taskSessionForRun = resetTaskSession ? null : taskSession;
++    const getFreshSessionHandoff = issueRef ? createNativeSessionHandoffLoader({
++        db, companyId: agent.companyId, issueId: issueRef.id, agentId: agent.id, before: run.createdAt,
++        throughCommentId: readNonEmptyString(context.conversationReplayThroughCommentId) ?? (context.interactionKind ? null : wakeCommentId),
++    }) : undefined;
++    const previousSessionParams = explicitResumeSessionParams ??
++        (isCanonicalSessionIdForAdapter(agent.adapterType, explicitResumeSessionDisplayId)
++            ? { sessionId: explicitResumeSessionDisplayId }
++            : null) ??
++        normalizeResumeParamsForAdapter(agent.adapterType, stripPaperclipSessionMetadataFromSessionParams(sessionCodec.deserialize(taskSessionForRun?.sessionParamsJson ?? null)));
++    // Legacy plugins can consume the existing context field on a known-fresh
++    // dispatch. Built-ins also load lazily if their resume attempt fails.
++    if (agent.adapterType !== "paperclip_runner" && !previousSessionParams && getFreshSessionHandoff) {
++        const handoff = await getFreshSessionHandoff();
++        if (handoff)
++            context.paperclipFreshSessionHandoffMarkdown = handoff;
++    }
++    return { sessionConfigMetadata, configuredModel, sessionConfigFreshness, resetTaskSession, sessionResetReason, taskSessionForRun, getFreshSessionHandoff, previousSessionParams };
++}
++/** Resolves adapter identity after workspace preparation, retaining in-place context and delta updates. */
++export async function resolveHeartbeatAdapterSession(input) {
++    const { agent, evaluateSessionCompaction } = input;
++    const { context, taskKey, issueId, continuationSummary, executionContinuation } = input.task;
++    const { runtime, taskSession, sessionCodec, explicitResumeSessionDisplayId, runtimeSessionParams, managedAiRuntime, prepared } = input.session;
++    const { sessionConfigMetadata, sessionConfigFreshness, resetTaskSession, taskSessionForRun, previousSessionParams } = prepared;
++    const { latestWorkspaceConfigMetadata, workspaceConfigFreshness, reusedExecutionWorkspace, resolvedWorkspaceReusePolicy, persistedExecutionWorkspace, runtimeWorkspaceWarnings, requestedShouldReuseExisting, workspaceReuseRequest } = input.workspace;
++    const runtimeSessionFallback = taskKey || resetTaskSession
++        ? null
++        : isCanonicalSessionIdForAdapter(agent.adapterType, runtime.sessionId)
++            ? runtime.sessionId
++            : null;
++    const runtimeSessionDisplayId = truncateDisplayId(explicitResumeSessionDisplayId ??
++        taskSessionForRun?.sessionDisplayId ??
++        (sessionCodec.getDisplayId
++            ? sessionCodec.getDisplayId(runtimeSessionParams)
++            : null) ??
++        readNonEmptyString(runtimeSessionParams?.sessionId) ??
++        runtimeSessionFallback);
++    let previousSessionDisplayId = requiresCanonicalSessionIds(agent.adapterType)
++        ? truncateDisplayId(readNonEmptyString(previousSessionParams?.sessionId) ??
++            (isCanonicalSessionIdForAdapter(agent.adapterType, runtimeSessionDisplayId)
++                ? runtimeSessionDisplayId
++                : null) ??
++            runtimeSessionFallback)
++        : runtimeSessionDisplayId;
++    let runtimeSessionIdForAdapter = readNonEmptyString(runtimeSessionParams?.sessionId) ??
++        runtimeSessionFallback;
++    let runtimeSessionParamsForAdapter = normalizeSessionParams(stripPaperclipSessionMetadataFromSessionParams(runtimeSessionParams));
++    const sessionCompaction = await evaluateSessionCompaction({
++        agent,
++        sessionId: previousSessionDisplayId ?? runtimeSessionIdForAdapter,
++        issueId,
++        continuationSummaryBody: continuationSummary?.body ?? null,
++    });
++    if (sessionCompaction.rotate) {
++        context.paperclipSessionHandoffMarkdown =
++            sessionCompaction.handoffMarkdown;
++        context.paperclipSessionRotationReason = sessionCompaction.reason;
++        context.paperclipPreviousSessionId =
++            previousSessionDisplayId ?? runtimeSessionIdForAdapter;
++        runtimeSessionIdForAdapter = null;
++        runtimeSessionParamsForAdapter = null;
++        previousSessionDisplayId = null;
++        if (sessionCompaction.reason) {
++            runtimeWorkspaceWarnings.push(`Starting a fresh session because ${sessionCompaction.reason}.`);
++        }
++    }
++    else {
++        delete context.paperclipSessionHandoffMarkdown;
++        delete context.paperclipSessionRotationReason;
++        delete context.paperclipPreviousSessionId;
++    }
++    const taskSessionCredentialCompatible = !managedAiRuntime || managedAiSessionIdentityCompatible(taskSession?.sessionParamsJson?.paperclipAiCredentialIdentity, managedAiRuntime.sessionIdentity, managedAiRuntime.identity);
++    if (managedAiRuntime) {
++        sessionConfigMetadata.aiCredentialIdentity = managedAiRuntime.sessionIdentity;
++        if (!taskSessionCredentialCompatible) {
++            runtimeSessionIdForAdapter = null;
++            runtimeSessionParamsForAdapter = null;
++            previousSessionDisplayId = null;
++            delete executionContinuation?.resumeDelta;
++        }
++    }
++    const runtimeForAdapter = {
++        sessionId: runtimeSessionIdForAdapter,
++        sessionParams: runtimeSessionParamsForAdapter,
++        sessionDisplayId: previousSessionDisplayId,
++        taskKey,
++    };
++    // A delta is safe only when the selected provider session is exactly the
++    // task session whose last dispatch supplied the baseline history.
++    if (executionContinuation?.resumeDelta &&
++        (!taskSessionForRun ||
++            !taskSession?.sessionDisplayId ||
++            runtimeForAdapter.sessionDisplayId !== taskSession.sessionDisplayId ||
++            resetTaskSession ||
++            context.forceFreshSession === true)) {
++        delete executionContinuation.resumeDelta;
++    }
++    const configFreshnessResultMetadata = {
++        version: sessionConfigMetadata.version,
++        session: {
++            fingerprintVersion: sessionConfigMetadata.version,
++            categories: sessionConfigMetadata.categories,
++            reset: resetTaskSession,
++            resetReasons: sessionConfigFreshness.reasons,
++            changedCategories: sessionConfigFreshness.changedCategories,
++            taskSessionAvailable: taskSession != null,
++            taskSessionReused: taskSessionForRun != null,
++            storedFingerprintPresent: Boolean(sessionConfigFreshness.storedFingerprint),
++            nextFingerprint: sessionConfigFreshness.nextFingerprint,
++        },
++        workspace: {
++            fingerprintVersion: latestWorkspaceConfigMetadata.version,
++            categories: latestWorkspaceConfigMetadata.categories,
++            action: workspaceConfigFreshness.action,
++            changedCategories: workspaceConfigFreshness.changedCategories,
++            reasons: workspaceConfigFreshness.reasons,
++            reuseRequested: requestedShouldReuseExisting,
++            workspaceReused: Boolean(reusedExecutionWorkspace),
++            configSnapshotRefreshed: resolvedWorkspaceReusePolicy.shouldRefreshWorkspaceConfigSnapshot,
++            storedFingerprintPresent: workspaceConfigFreshness.storedFingerprintPresent,
++            storedFingerprint: workspaceConfigFreshness.storedFingerprint,
++            inferredFingerprint: workspaceConfigFreshness.inferredFingerprint,
++            nextFingerprint: workspaceConfigFreshness.nextFingerprint,
++            previousWorkspaceId: workspaceReuseRequest.requestedExecutionWorkspaceId,
++            activeWorkspaceId: persistedExecutionWorkspace?.id ?? null,
++        },
++    };
++    return { previousSessionDisplayId, runtimeSessionParamsForAdapter, taskSessionCredentialCompatible, runtimeForAdapter, configFreshnessResultMetadata, sessionCompaction };
++}
++//# sourceMappingURL=session-preparation.js.map
+\ No newline at end of file
+diff --git a/patches/syndicate/ui/2026.1117.0/PATCH-MANIFEST.txt b/patches/syndicate/ui/2026.1117.0/PATCH-MANIFEST.txt
+new file mode 100644
+index 000000000..94bd7ced8
+--- /dev/null
++++ b/patches/syndicate/ui/2026.1117.0/PATCH-MANIFEST.txt
+@@ -0,0 +1,89 @@
++Paperclip UI source patches ported to release v2026.1117.0
++=========================================================
++
++Artifact
++--------
++PAPERCLIP_RUN_SCRATCH_DIR/staging-ui/fallback-model-2026.1117.0/
++Flat copy of the complete built ui/dist (581 files, including assets/, index.html, sw.js).
++Source of build: PAPERCLIP_RUN_SCRATCH_DIR/repo at tag v2026.1117.0 (commit c0f1328).
++Nothing was deployed; no live service, /root/.paperclip/cli, /opt, /usr/local/bin, or systemd was touched.
++
++Markers in staged assets (grep -rlF against ui/dist/assets)
++-----------------------------------------------------------
++fallbackModel                                    -> assets/issue-detail-CnKPR5yd.js
++execution-stage-decision-card                    -> assets/issue-detail-CnKPR5yd.js
++shrink-0 rounded-md p-1 text-muted-foreground    -> assets/issue-detail-CnKPR5yd.js (upstream in 2026.1117.0; not re-ported)
++index.html: present (7819 bytes)
++sw.js: present (28769 bytes)
++
++Verification
++------------
++Typecheck: CI=true corepack pnpm --filter @paperclipai/ui typecheck -> PASS (clean).
++  Initial run failed only on missing @paperclipai/plugin-sdk/ui declarations; after building the
++  required workspace packages it passed with no errors in patched files.
++Tests: PATH with scratch pnpm shim, CI=true corepack pnpm exec vitest run
++  ui/src/components/IssueProperties.test.tsx ui/src/components/AgentConfigForm.render.test.tsx
++  -> 2 files passed, 301 tests passed (includes 9 new stage-decision tests).
++Dependency build: CI=true NODE_ENV=development corepack pnpm --filter @paperclipai/plugin-sdk
++  --filter @paperclipai/shared --filter @paperclipai/adapter-utils --filter @paperclipai/db build -> PASS.
++  Nested scripts call bare pnpm, so a scratch-only pnpm shim
++  (PAPERCLIP_RUN_SCRATCH_DIR/opencode/pnpm) was prepended to PATH.
++UI build: CI=true NODE_ENV=production corepack pnpm build (in ui/) -> PASS (8267 modules, built in 8.91s).
++
++Files changed (line numbers after port)
++---------------------------------------
++ui/src/components/issue-properties/IssueProperties.tsx
++  38    import useOptionalToastActions
++  1115-1151 pendingStageDecision gate, comment state/mutation, invalid-comment guard,
++        draft reset keyed by stage type + participant (mutation reset in deps instead of
++        the reference eslint-disable comment)
++  2755-2810 decision card JSX with data-testids execution-stage-decision-card,
++        execution-stage-decision-comment, execution-stage-request-changes,
++        execution-stage-approve, execution-stage-decision-error
++ui/src/components/IssueProperties.test.tsx
++  52    mockIssuesApi.update
++  666-672 update mock resolves with a comment receipt (required by 2026.1117.0
++        issuesApi.update confirmedCommentResponse; reference used {} which would now fail)
++  2963-3162 new "pending execution stage decision card" describe block with all 9
++        reference test cases
++ui/src/components/AgentConfigForm.tsx
++  1141  fallbackModelOpen state
++  1434-1436 currentFallbackModelId (edit flow only)
++  1884  fallbackModel: "" on adapter config reset
++  2032-2047 fallback ModelDropdown for opencode_local edit flow (label/hint/defaultLabel)
++  4081-4082 ModelDropdown label/hint props with existing defaults
++  4105-4106 label/hint prop types
++  4183,4221 Field uses label/hint (both native and searchable presentations)
++ui/src/components/agent-config-primitives.tsx
++  32    help.fallbackModel entry
++
++Skipped / adapted
++-----------------
++- Reference patch explanatory comments were not copied (no new comments policy); behavior and
++  data-testids are preserved.
++- Description-edit patch was intentionally not applied: marker is already upstream in 2026.1117.0.
++- Reference test's useOptionalToastActions mock addition was not needed: already present at line 118
++  of the 2026.1117.0 test harness.
++- Reference test's empty update mock response was adapted to a valid comment receipt as noted above.
++- No test cases from the reference block were skipped. Full repo test suite was not run; only the
++  two relevant test files.
++
++Risks
++-----
++- Runtime fallback behavior (opencode_local retry on provider token/quota errors) is server/adapter
++  side and was not exercised here; only the UI configuration surface and built markers were verified.
++- Production build emitted pre-existing warnings (unsupported Vite native-config features, ::highlight
++  CSS pseudo-element warnings, chunk-size and ineffective dynamic-import warnings); build succeeded.
++- A pending stage decision now writes status + comment through issuesApi.update, whose
++  confirmedCommentResponse requires a valid comment receipt from the server; this matches current
++  upstream API semantics but was only validated with mocks in this scratch build.
++
++Deployed add-on: creation stage picker (SYN-546) + cache-bust r758
++-------------------------------------------------------------------
++The creation-stage picker (choose Backlog/Todo/... when creating a task) was
++ported from the local 2026.1106.0 build into the built 2026.1117.0 entry chunk.
++  marker: "Select stage"        -> assets/index-y0oACdWB-r758.js
++  re-apply script: STAGE-PICKER-ASSET-PATCH.py (in fallback-model-2026.1117.0)
++Every chunk that transitively imports the entry chunk was renamed r757 -> r758
++(255 files) and all references rewritten, so a warm browser cannot keep
++executing the pre-patch module graph.
+diff --git a/patches/syndicate/ui/2026.1117.0/SOURCE-fallback-ui.patch b/patches/syndicate/ui/2026.1117.0/SOURCE-fallback-ui.patch
+new file mode 100644
+index 000000000..a30fef4db
+--- /dev/null
++++ b/patches/syndicate/ui/2026.1117.0/SOURCE-fallback-ui.patch
+@@ -0,0 +1,108 @@
++diff --git a/ui/src/components/AgentConfigForm.tsx b/ui/src/components/AgentConfigForm.tsx
++index 97dd7c5..fa4fa89 100644
++--- a/ui/src/components/AgentConfigForm.tsx
+++++ b/ui/src/components/AgentConfigForm.tsx
++@@ -1138,6 +1138,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
++   );
++   // Popover states
++   const [modelOpen, setModelOpen] = useState(false);
+++  const [fallbackModelOpen, setFallbackModelOpen] = useState(false);
++   const [thinkingEffortOpen, setThinkingEffortOpen] = useState(false);
++ 
++   function buildAdapterConfigForTest(adapterConfigPatch?: Record<string, unknown>): Record<string, unknown> {
++@@ -1430,6 +1431,9 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
++     ? val!.model ?? ""
++     : eff("adapterConfig", "model", String(config.model ?? ""));
++   const currentModelId = typeof currentModelValue === "string" ? currentModelValue : "";
+++  const currentFallbackModelId = !isCreate
+++    ? eff("adapterConfig", "fallbackModel", String(config.fallbackModel ?? ""))
+++    : "";
++ 
++   async function handleRefreshModels() {
++     if (!selectedCompanyId) return;
++@@ -1877,6 +1881,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
++                         modelReasoningEffort: "",
++                         variant: "",
++                         mode: "",
+++                        fallbackModel: "",
++                         ...(external
++                             ? { provider: muse ? "muse" : "openai_dot", lifecycleMode: "per_turn", allowUnmeteredProvider: false, ...(dot ? { dotAttachmentAccess: false, dotWorkspaceAccess: false } : {}) }
++                           : t === "paperclip_runner"
++@@ -2024,9 +2029,26 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
++                 </p>
++               )}
++ 
++-              {showThinkingEffort && (
++-                <>
++-                  <ThinkingEffortDropdown
+++               {adapterType === "opencode_local" && !isCreate && (
+++                 <ModelDropdown
+++                   models={models}
+++                   value={currentFallbackModelId}
+++                   onChange={(v) => mark("adapterConfig", "fallbackModel", v || undefined)}
+++                   open={fallbackModelOpen}
+++                   onOpenChange={setFallbackModelOpen}
+++                   allowDefault
+++                   required={false}
+++                   groupByProvider
+++                   creatable
+++                   defaultLabel="No fallback"
+++                   label="Fallback model"
+++                   hint={help.fallbackModel}
+++                 />
+++               )}
+++
+++               {showThinkingEffort && (
+++                 <>
+++                   <ThinkingEffortDropdown
++                     value={currentThinkingEffort}
++                     options={thinkingEffortOptions}
++                     onChange={(v) =>
++@@ -4056,6 +4078,8 @@ export function ModelDropdown({
++   detectModelLabel,
++   emptyDetectHint,
++   defaultLabel,
+++  label = "Model",
+++  hint = help.model,
++   presentation = "searchable",
++ }: {
++   models: AdapterModel[];
++@@ -4078,6 +4102,8 @@ export function ModelDropdown({
++   detectModelLabel?: string;
++   emptyDetectHint?: string;
++   defaultLabel?: string;
+++  label?: string;
+++  hint?: string;
++   presentation?: "searchable" | "native";
++ }) {
++   const [modelSearch, setModelSearch] = useState("");
++@@ -4154,7 +4180,7 @@ export function ModelDropdown({
++     const customOption = "__paperclip_custom_model__";
++     const extraModels = [...new Set([value, ...promotedModelIds])].filter(id => id && (!models.some(model => model.id === id) || promotedModelIds.has(id)));
++     return (
++-      <Field label="Model" hint={help.model}>
+++      <Field label={label} hint={hint}>
++         <NativeSelect
++           aria-label="Model"
++           aria-busy={loadingModels || refreshingModels}
++@@ -4192,7 +4218,7 @@ export function ModelDropdown({
++   }
++ 
++   return (
++-    <Field label="Model" hint={help.model}>
+++    <Field label={label} hint={hint}>
++       <SelectPopover aria-label="Model" value={value}
++         displayValue={<span className={cn("truncate", !value && "text-muted-foreground")}>
++           {selected?.label ?? (value || (allowDefault ? (defaultLabel ?? "Default") : required ? "Select model (required)" : "Select model"))}
++diff --git a/ui/src/components/agent-config-primitives.tsx b/ui/src/components/agent-config-primitives.tsx
++index f4bc172..6993746 100644
++--- a/ui/src/components/agent-config-primitives.tsx
+++++ b/ui/src/components/agent-config-primitives.tsx
++@@ -29,6 +29,7 @@ export const help: Record<string, string> = {
++   cwd: "Deprecated legacy working directory fallback for local adapters. Existing agents may still carry this value, but new configurations should use project workspaces instead.",
++   promptTemplate: "Sent on every heartbeat. Keep this small and dynamic. Use it for current-task framing, not large static instructions. Supports {{ agent.id }}, {{ agent.name }}, {{ agent.role }} and other template variables.",
++   model: "Override the default model used by the adapter.",
+++  fallbackModel: "Optional OpenCode fallback model (provider/model) for a single retry when the provider reports token or quota exhaustion.",
++   thinkingEffort: "Control model reasoning depth. Supported values vary by adapter/model.",
++   chrome: "Enable Claude's Chrome integration by passing --chrome.",
++   dangerouslySkipPermissions: "Run unattended by auto-approving adapter permission prompts when supported.",
+diff --git a/patches/syndicate/ui/2026.1117.0/SOURCE-stage-decision-ui.patch b/patches/syndicate/ui/2026.1117.0/SOURCE-stage-decision-ui.patch
+new file mode 100644
+index 000000000..cae43e95b
+--- /dev/null
++++ b/patches/syndicate/ui/2026.1117.0/SOURCE-stage-decision-ui.patch
+@@ -0,0 +1,364 @@
++diff --git a/ui/src/components/IssueProperties.test.tsx b/ui/src/components/IssueProperties.test.tsx
++index dcba674..1629d08 100644
++--- a/ui/src/components/IssueProperties.test.tsx
+++++ b/ui/src/components/IssueProperties.test.tsx
++@@ -49,6 +49,7 @@ const mockIssuesApi = vi.hoisted(() => ({
++   upsertWatchdog: vi.fn(),
++   deleteWatchdog: vi.fn(),
++   unarchiveFromInbox: vi.fn(),
+++  update: vi.fn(),
++ }));
++ 
++ const mockRoutinesApi = vi.hoisted(() => ({
++@@ -662,6 +663,11 @@ describe("IssueProperties", () => {
++     mockIssuesApi.upsertWatchdog.mockResolvedValue({});
++     mockIssuesApi.deleteWatchdog.mockResolvedValue({ ok: true });
++     mockIssuesApi.unarchiveFromInbox.mockResolvedValue({ ok: true });
+++    mockIssuesApi.update.mockResolvedValue({
+++      id: "00000000-0000-4000-8000-000000000001",
+++      issueId: "00000000-0000-4000-8000-000000000001",
+++      body: "Decision comment",
+++    });
++     mockAuthApi.getSession.mockResolvedValue({ user: { id: "user-1" } });
++     mockAccessApi.listUserDirectory.mockResolvedValue({
++       users: [
++@@ -2954,6 +2960,219 @@ describe("IssueProperties", () => {
++     act(() => root.unmount());
++   });
++ 
+++  describe("pending execution stage decision card", () => {
+++    const pendingUserStage = (extra: Record<string, unknown> = {}) =>
+++      createIssue({
+++        status: "in_review",
+++        executionPolicy: createExecutionPolicy({
+++          stages: [
+++            {
+++              id: "review-stage",
+++              type: "review",
+++              approvalsNeeded: 1,
+++              participants: [{ id: "participant-1", type: "user", agentId: null, userId: "user-1" }],
+++            },
+++          ],
+++        }),
+++        executionState: createExecutionState({
+++          status: "pending",
+++          currentStageType: "review",
+++          currentParticipant: { type: "user", agentId: null, userId: "user-1" },
+++          lastDecisionOutcome: null,
+++          ...extra,
+++        }),
+++      });
+++
+++    const commentBox = () =>
+++      container.querySelector<HTMLTextAreaElement>('[data-testid="execution-stage-decision-comment"]')!;
+++    const waitForCard = async () => {
+++      await waitForAssertion(() => {
+++        expect(container.querySelector('[data-testid="execution-stage-decision-card"]')).not.toBeNull();
+++      });
+++    };
+++    const typeComment = async (value: string) => {
+++      const textarea = commentBox();
+++      await act(async () => {
+++        const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")!.set!;
+++        setter.call(textarea, value);
+++        textarea.dispatchEvent(new Event("input", { bubbles: true }));
+++      });
+++      await flush();
+++    };
+++
+++    const clickButton = async (button: Element | null) => {
+++      await act(async () => {
+++        button!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+++      });
+++    };
+++
+++    it("offers Approve and Request changes to the human stage participant", async () => {
+++      const root = renderProperties(container, { issue: pendingUserStage(), onUpdate: vi.fn() });
+++      await waitForCard();
+++
+++      const card = container.querySelector('[data-testid="execution-stage-decision-card"]');
+++      expect(card).not.toBeNull();
+++      expect(card!.textContent).toContain("Review decision needed");
+++      expect(container.querySelector('[data-testid="execution-stage-approve"]')).not.toBeNull();
+++      expect(container.querySelector('[data-testid="execution-stage-request-changes"]')).not.toBeNull();
+++
+++      act(() => root.unmount());
+++    });
+++
+++    it("keeps both buttons disabled until a decision comment is written", async () => {
+++      const root = renderProperties(container, { issue: pendingUserStage(), onUpdate: vi.fn() });
+++      await waitForCard();
+++
+++      const approve = container.querySelector<HTMLButtonElement>('[data-testid="execution-stage-approve"]')!;
+++      const requestChanges = container.querySelector<HTMLButtonElement>('[data-testid="execution-stage-request-changes"]')!;
+++      expect(approve.disabled).toBe(true);
+++      expect(requestChanges.disabled).toBe(true);
+++
+++      await typeComment("   \n  ");
+++      expect(approve.disabled).toBe(true);
+++
+++      await typeComment("Ship it.");
+++      expect(approve.disabled).toBe(false);
+++      expect(requestChanges.disabled).toBe(false);
+++
+++      act(() => root.unmount());
+++    });
+++
+++    it("sends the comment in the same PATCH as the status change", async () => {
+++      const root = renderProperties(container, { issue: pendingUserStage(), onUpdate: vi.fn() });
+++      await waitForCard();
+++
+++      await typeComment("  Verified against the spec.  ");
+++      await clickButton(container.querySelector('[data-testid="execution-stage-approve"]'));
+++
+++      expect(mockIssuesApi.update).toHaveBeenCalledWith("issue-1", {
+++        status: "done",
+++        comment: "Verified against the spec.",
+++      });
+++
+++      act(() => root.unmount());
+++    });
+++
+++    it("returns the task to the assignee with the comment when changes are requested", async () => {
+++      const root = renderProperties(container, { issue: pendingUserStage(), onUpdate: vi.fn() });
+++      await waitForCard();
+++
+++      await typeComment("The migration is missing the backfill step.");
+++      await clickButton(container.querySelector('[data-testid="execution-stage-request-changes"]'));
+++
+++      expect(mockIssuesApi.update).toHaveBeenCalledWith("issue-1", {
+++        status: "in_progress",
+++        comment: "The migration is missing the backfill step.",
+++      });
+++
+++      act(() => root.unmount());
+++    });
+++
+++    it("surfaces the server rejection instead of failing silently", async () => {
+++      mockIssuesApi.update.mockRejectedValueOnce(
+++        new Error("Approving a review or approval stage requires a comment."),
+++      );
+++      const root = renderProperties(container, { issue: pendingUserStage(), onUpdate: vi.fn() });
+++      await waitForCard();
+++
+++      await typeComment("Looks good.");
+++      await clickButton(container.querySelector('[data-testid="execution-stage-approve"]'));
+++      await waitForAssertion(() => {
+++        expect(container.querySelector('[data-testid="execution-stage-decision-error"]')).not.toBeNull();
+++      });
+++
+++      act(() => root.unmount());
+++    });
+++
+++    it("hides the card from viewers who are not the stage participant", async () => {
+++      mockAuthApi.getSession.mockResolvedValue({ user: { id: "user-2" } });
+++      const root = renderProperties(container, { issue: pendingUserStage(), onUpdate: vi.fn() });
+++      await waitForAssertion(() => {
+++        expect(container.textContent).toContain("Review pending with");
+++      });
+++
+++      expect(container.querySelector('[data-testid="execution-stage-decision-card"]')).toBeNull();
+++      expect(container.textContent).toContain("Review pending with");
+++
+++      act(() => root.unmount());
+++    });
+++
+++    it("hides the card when an agent holds the stage", async () => {
+++      const root = renderProperties(container, {
+++        issue: createIssue({
+++          status: "in_review",
+++          executionPolicy: createExecutionPolicy({
+++            stages: [
+++              {
+++                id: "review-stage",
+++                type: "review",
+++                approvalsNeeded: 1,
+++                participants: [{ id: "participant-1", type: "agent", agentId: "agent-1", userId: null }],
+++              },
+++            ],
+++          }),
+++          executionState: createExecutionState({
+++            status: "pending",
+++            currentStageType: "review",
+++            currentParticipant: { type: "agent", agentId: "agent-1", userId: null },
+++            lastDecisionOutcome: null,
+++          }),
+++        }),
+++        onUpdate: vi.fn(),
+++      });
+++      await flush();
+++
+++      expect(container.querySelector('[data-testid="execution-stage-decision-card"]')).toBeNull();
+++
+++      act(() => root.unmount());
+++    });
+++
+++    it("hides the card once changes have been requested", async () => {
+++      const root = renderProperties(container, {
+++        issue: pendingUserStage({
+++          status: "changes_requested",
+++          lastDecisionOutcome: "changes_requested",
+++        }),
+++        onUpdate: vi.fn(),
+++      });
+++      await flush();
+++
+++      expect(container.querySelector('[data-testid="execution-stage-decision-card"]')).toBeNull();
+++
+++      act(() => root.unmount());
+++    });
+++
+++    it("clears a stale draft when the pending stage changes", async () => {
+++      const props = { childIssues: [], onUpdate: vi.fn() } as unknown as ComponentProps<typeof IssueProperties>;
+++      const { root, queryClient } = renderPropertiesWithQueryClient(container, {
+++        ...props,
+++        issue: pendingUserStage(),
+++      });
+++      await waitForCard();
+++
+++      await typeComment("draft for the previous stage");
+++      expect(commentBox().value).toBe("draft for the previous stage");
+++
+++      await act(async () => {
+++        root.render(
+++          <QueryClientProvider client={queryClient}>
+++            <IssueProperties
+++              {...({
+++                ...props,
+++                issue: pendingUserStage({ currentStageId: "approval-stage", currentStageType: "approval" }),
+++              } as ComponentProps<typeof IssueProperties>)}
+++            />
+++          </QueryClientProvider>,
+++        );
+++      });
+++      await flush();
+++
+++      expect(commentBox().value).toBe("");
+++
+++      act(() => root.unmount());
+++    });
+++  });
+++
++   it("renders monitor controls and clears an existing monitor", async () => {
++     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(new Date("2026-04-11T10:00:00.000Z").getTime());
++     const onUpdate = vi.fn();
++diff --git a/ui/src/components/issue-properties/IssueProperties.tsx b/ui/src/components/issue-properties/IssueProperties.tsx
++index 2ca2e7b..427dde5 100644
++--- a/ui/src/components/issue-properties/IssueProperties.tsx
+++++ b/ui/src/components/issue-properties/IssueProperties.tsx
++@@ -35,6 +35,7 @@ import { selectArtifactAttachments } from "@/lib/issue-artifacts";
++ import { projectsApi } from "../../api/projects";
++ import { useCompany } from "../../context/CompanyContext";
++ import { useSidebar } from "../../context/SidebarContext";
+++import { useOptionalToastActions } from "../../context/ToastContext";
++ import { queryKeys } from "../../lib/queryKeys";
++ import { ACCOUNT_BOUND_MODEL_DISCOVERY_QUERY_OPTIONS, nativeTaskModelCatalogOptions } from "../../lib/native-model-catalog";
++ import { buildCompanyUserInlineOptions, buildCompanyUserLabelMap, buildCompanyUserProfileMap, isAgentTaskTarget } from "../../lib/company-members";
++@@ -1111,6 +1112,43 @@ export function IssueProperties({
++     }
++     return `${stageLabel} pending${participantLabel ? ` with ${participantLabel}` : ""}`;
++   })();
+++  const pendingStageDecision = (() => {
+++    const state = issue.executionState;
+++    if (!state || state.status !== "pending") return null;
+++    if (state.currentStageType !== "review" && state.currentStageType !== "approval") return null;
+++    const participant = state.currentParticipant;
+++    if (participant?.type !== "user" || !participant.userId) return null;
+++    if (participant.userId !== currentUserId) return null;
+++    return state;
+++  })();
+++  const [stageDecisionComment, setStageDecisionComment] = useState("");
+++  const stageDecisionToasts = useOptionalToastActions();
+++  const submitStageDecision = useMutation({
+++    mutationFn: (status: "done" | "in_progress") =>
+++      issuesApi.update(issue.id, { status, comment: stageDecisionComment.trim() }),
+++    onSuccess: (_updated, status) => {
+++      setStageDecisionComment("");
+++      void queryClient.invalidateQueries({ queryKey: queryKeys.issues.detail(issue.id) });
+++      void queryClient.invalidateQueries({ queryKey: queryKeys.issues.activity(issue.id) });
+++      if (companyId) invalidateInboxIssueQueries(queryClient, companyId);
+++      stageDecisionToasts?.pushToast({
+++        title: status === "done"
+++          ? "Approved — stage cleared."
+++          : "Changes requested — returned to the assignee.",
+++        tone: "success",
+++      });
+++    },
+++  });
+++  const stageDecisionReady = stageDecisionComment.trim().length > 0;
+++  const stageDecisionError =
+++    submitStageDecision.error instanceof Error ? submitStageDecision.error.message : null;
+++  const stageDecisionKey = pendingStageDecision
+++    ? `${pendingStageDecision.currentStageType}:${pendingStageDecision.currentParticipant?.userId ?? ""}`
+++    : null;
+++  useEffect(() => {
+++    setStageDecisionComment("");
+++    submitStageDecision.reset();
+++  }, [stageDecisionKey, issue.id, submitStageDecision.reset]);
++   useEffect(() => {
++     setMonitorAtInput(toDateTimeLocalValue(executionPolicy?.monitor?.nextCheckAt));
++     setMonitorNotesInput(executionPolicy?.monitor?.notes ?? "");
++@@ -2714,6 +2752,63 @@ export function IssueProperties({
++           </PropertyRow>
++         )}
++ 
+++        {pendingStageDecision && (
+++          <div
+++            className="rounded-md border border-border bg-muted/40 p-3 space-y-2"
+++            data-testid="execution-stage-decision-card"
+++          >
+++            <p className="text-sm font-medium text-foreground">
+++              {pendingStageDecision.currentStageType === "review" ? "Review" : "Approval"} decision needed
+++            </p>
+++            <Textarea
+++              value={stageDecisionComment}
+++              onChange={(event) => {
+++                setStageDecisionComment(event.target.value);
+++                if (submitStageDecision.isError) submitStageDecision.reset();
+++              }}
+++              rows={3}
+++              className="text-xs"
+++              placeholder="Required — this becomes the decision comment on the task."
+++              data-testid="execution-stage-decision-comment"
+++              aria-label="Decision comment"
+++            />
+++            <div className="flex flex-wrap items-center gap-2">
+++              <Button
+++                type="button"
+++                size="sm"
+++                variant="outline"
+++                className="h-7 text-xs"
+++                disabled={!stageDecisionReady || submitStageDecision.isPending}
+++                title={stageDecisionReady ? undefined : "Add a decision comment first"}
+++                onClick={() => submitStageDecision.mutate("in_progress")}
+++                data-testid="execution-stage-request-changes"
+++              >
+++                {submitStageDecision.variables === "in_progress" && submitStageDecision.isPending
+++                  ? "Sending back…"
+++                  : "Request changes"}
+++              </Button>
+++              <Button
+++                type="button"
+++                size="sm"
+++                className="h-7 text-xs"
+++                disabled={!stageDecisionReady || submitStageDecision.isPending}
+++                title={stageDecisionReady ? undefined : "Add a decision comment first"}
+++                onClick={() => submitStageDecision.mutate("done")}
+++                data-testid="execution-stage-approve"
+++              >
+++                {submitStageDecision.variables === "done" && submitStageDecision.isPending
+++                  ? "Approving…"
+++                  : "Approve"}
+++              </Button>
+++            </div>
+++            {stageDecisionError && (
+++              <p className="text-xs text-destructive" data-testid="execution-stage-decision-error">
+++                {stageDecisionError}
+++              </p>
+++            )}
+++          </div>
+++        )}
+++
++         {showScheduledRetryRow && scheduledRetry?.scheduledRetryReason === "workspace_busy" ? (
++           <PropertyRow label="Workspace">
++             <span className="text-sm text-muted-foreground">Waiting for workspace</span>
+-- 
+2.43.0
+
