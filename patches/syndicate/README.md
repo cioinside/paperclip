@@ -3,7 +3,16 @@
 The patches Syndicate runs on the deployed Paperclip build, kept here so that this
 fork carries them and they can be read, rebased and sent upstream.
 
-Base of this branch: tag `v2026.1117.0` — the version the live instance runs.
+Where the patches live in this fork:
+
+- `master` tracks `paperclipai/paperclip` master.
+- `syn/upstream-master` (this branch) — upstream master plus our commits: the two UI
+  patches and the secrets hint as source code, and the patch set below.
+- `syn/patch-set` — the same patch set on the fork's older base, kept as files.
+
+The commits on this branch sit on upstream master. The patch files under `server/`,
+`ui/` and `adapter/` are written against tag `v2026.1117.0` — the version the live
+instance runs.
 
 ## Applied on this branch (source level)
 
@@ -12,6 +21,10 @@ Base of this branch: tag `v2026.1117.0` — the version the live instance runs.
 | `feat(ui): fallbackModel picker in the agent config form` | `ui/2026.1117.0/SOURCE-fallback-ui.patch` | the fallback model picker in the agent config form |
 | `feat(ui): execution stage-decision card in issue properties` | `ui/2026.1117.0/SOURCE-stage-decision-ui.patch` | the stage-decision card in issue properties |
 | `fix(server): name the exact secret key in the access-denied answer` | source twin of `server/2026.1117.0/SOURCE-secrets.patch` | the 403 body points at `GET /api/agents/me/secrets` |
+
+`SOURCE-stage-decision-ui.patch` also carries a test for
+`ui/src/components/IssueProperties.test.tsx`. Upstream master has no such file, so
+the commit above carries only the component change.
 
 ## Patch files for the published build
 
