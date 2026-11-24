@@ -1192,6 +1192,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
   );
   // Popover states
   const [modelOpen, setModelOpen] = useState(false);
+  const [fallbackModelOpen, setFallbackModelOpen] = useState(false);
   const [thinkingEffortOpen, setThinkingEffortOpen] = useState(false);
 
   function buildAdapterConfigForTest(adapterConfigPatch?: Record<string, unknown>): Record<string, unknown> {
@@ -1478,6 +1479,9 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
     ? val!.model ?? ""
     : eff("adapterConfig", "model", String(config.model ?? ""));
   const currentModelId = typeof currentModelValue === "string" ? currentModelValue : "";
+  const currentFallbackModelId = !isCreate
+    ? eff("adapterConfig", "fallbackModel", String(config.fallbackModel ?? ""))
+    : "";
 
   async function handleRefreshModels() {
     if (!selectedCompanyId) return;
@@ -1933,6 +1937,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                         modelReasoningEffort: "",
                         variant: "",
                         mode: "",
+                        fallbackModel: "",
                         ...(external
                             ? { provider: muse ? "muse" : "openai_dot", lifecycleMode: "per_turn", allowUnmeteredProvider: false, ...(dot ? { dotAttachmentAccess: false, dotWorkspaceAccess: false } : {}) }
                           : t === "paperclip_runner"
@@ -2083,9 +2088,26 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                 </p>
               )}
 
-              {showThinkingEffort && (
-                <>
-                  <ThinkingEffortDropdown
+               {adapterType === "opencode_local" && !isCreate && (
+                 <ModelDropdown
+                   models={models}
+                   value={currentFallbackModelId}
+                   onChange={(v) => mark("adapterConfig", "fallbackModel", v || undefined)}
+                   open={fallbackModelOpen}
+                   onOpenChange={setFallbackModelOpen}
+                   allowDefault
+                   required={false}
+                   groupByProvider
+                   creatable
+                   defaultLabel="No fallback"
+                   label="Fallback model"
+                   hint={help.fallbackModel}
+                 />
+               )}
+
+               {showThinkingEffort && (
+                 <>
+                   <ThinkingEffortDropdown
                     value={currentThinkingEffort}
                     options={thinkingEffortOptions}
                     onChange={(v) =>
@@ -4137,6 +4159,8 @@ export function ModelDropdown({
   detectModelLabel,
   emptyDetectHint,
   defaultLabel,
+  label = "Model",
+  hint = help.model,
   presentation = "searchable",
   groupModel,
 }: {
@@ -4160,6 +4184,8 @@ export function ModelDropdown({
   detectModelLabel?: string;
   emptyDetectHint?: string;
   defaultLabel?: string;
+  label?: string;
+  hint?: string;
   presentation?: "searchable" | "native";
   /** Groups a curated list by model family, keeping its order; each entry shows
    * the variant (for example a thinking level) and an optional note. */
@@ -4254,7 +4280,7 @@ export function ModelDropdown({
     const customOption = "__paperclip_custom_model__";
     const extraModels = [...new Set([value, ...promotedModelIds])].filter(id => id && (!models.some(model => model.id === id) || promotedModelIds.has(id)));
     return (
-      <Field label="Model" hint={help.model}>
+      <Field label={label} hint={hint}>
         <NativeSelect
           aria-label="Model"
           aria-busy={loadingModels || refreshingModels}
@@ -4292,7 +4318,7 @@ export function ModelDropdown({
   }
 
   return (
-    <Field label="Model" hint={help.model}>
+    <Field label={label} hint={hint}>
       <SelectPopover aria-label="Model" value={value}
         displayValue={<span className={cn("truncate", !value && "text-muted-foreground")}>
           {selected?.label ?? (value || (allowDefault ? (defaultLabel ?? "Default") : required ? "Select model (required)" : "Select model"))}
