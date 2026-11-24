@@ -1,0 +1,98 @@
+source_release            @paperclipai/server 2026.1117.0
+pristine_dist             /root/.paperclip/cli/installs/npm/2026.1117.0/node_modules/@paperclipai/server/dist
+source_repo_context       $PAPERCLIP_RUN_SCRATCH_DIR/repo (tag v2026.1117.0, commit c0f1328)
+built_at                  2026-11-21
+scope                     Research + artifact preparation only. No live system files modified.
+
+PATCHES
+=======
+
+1) SOURCE-secrets.patch
+   origin                /opt/paperclip-server-patch/2026.1012.0/SOURCE-secrets.patch
+   patched_files         dist/routes/secrets.js
+   marker                Use the exact `key` from GET /api/agents/me/secrets
+   semantics             Preserved exactly: POST /api/agents/me/secrets/:key/value 403
+                         message gains actionable hint pointing to GET /api/agents/me/secrets.
+                         Status code and access logic unchanged.
+   porting_note          2026.1012.0 patch was `a/secrets.js` applied from routes/ dir (-p1).
+                         2026.1117.0 artifact is `a/routes/secrets.js` / `b/routes/secrets.js`
+                         and applies cleanly with `patch -p1 --batch` from dist root (same
+                         contract as the other 2026.1117.0 patches). The live secrets patch
+                         script /usr/local/bin/paperclip-server-secrets-patch.sh uses
+                         `cd "$(dirname "$dist_file")" && patch -p1` and has no SUPPORTED_VERSION
+                         gate; it cannot consume this dist-root-form patch as-is.
+
+2) SOURCE-issue-scoped-run-lookup.patch
+   origin                /opt/paperclip-server-patch/2026.1106.0/SOURCE-issue-scoped-run-lookup.patch
+                         (SYN-554)
+   patched_files         dist/routes/agents.js
+                         dist/routes/issues.js
+                         dist/services/heartbeat.js
+                         dist/services/heartbeat/run-state.js
+   marker                getLiveRunForIssue
+   semantics             Preserved exactly: resolve active/live run by ISSUE identity
+                         (companyId + issueId/nativeIssueId/contextSnapshot.issueId),
+                         not by assignee agent's newest running run. Prevents wrong-run
+                         resolution when an agent works multiple issues: active-run endpoint,
+                         board comment interrupt, reassignment stop, terminalization stop.
+                         Running run wins over queued run. Company scope enforced.
+   porting_judgment      2026.1117.0 added queueStateOnly issue-control paths in routes/issues.js
+                         (getRunIssueControl/getActiveRunIssueControlForAgent). To preserve
+                         semantics without dropping queue-state optimization, patch adds
+                         getLiveRunIssueControlForIssue(companyId, issueId) in run-state.js and
+                         exports/wires it through heartbeat.js; resolveActiveIssueRun uses it
+                         when options.queueStateOnly is true. This keeps issue-identity lookup
+                         while returning the lightweight control projection.
+                         References: routes/issues.js resolveActiveIssueRun (~5035 in pristine),
+                         services/heartbeat/run-state.js heartbeatRunIssueControlColumns (~288).
+
+3) SOURCE-routine-dispatch-conflict.patch
+   origin                /opt/paperclip-server-patch/2026.1106.0/SOURCE-routine-dispatch-conflict.patch
+                         (SYN-745)
+   patched_files         dist/services/routines.js
+   markers               isOpenRoutineExecutionConflict, describeErrorChain
+   semantics             Preserved exactly: detect 23505 open routine execution conflict by
+                         walking Drizzle/Postgres cause chain (constraint_name/constraint/message),
+                         not fragile top-level error.constraint. On dispatch claim conflict,
+                         merge into live execution issue as coalesced/skipped instead of failing.
+                         failure_reason uses describeErrorChain to include real Postgres cause.
+                         Pre-existing 23505 handler around issue creation uses same cause-aware check.
+   porting_judgment      2026.1117.0 routines.js includes extra cleanup in outer catch
+                         (notifyApprovalWork/notifyDecisionTargetIssueRemoval/notifyStatusCardIssueChange)
+                         before deleting createdIssue; patch preserves these new calls and inserts
+                         the coalesce/merge handling after them, before failure finalization.
+                         Reference: services/routines.js outer dispatch catch (~1581 in pristine).
+
+VERIFICATION (performed against scratch copies only)
+====================================================
+- Clean apply: `patch -p1 --batch` succeeded for all 3 patches against pristine
+  2026.1117.0 dist copy in $PAPERCLIP_RUN_SCRATCH_DIR/verify-*.
+- node --check: passed for all patched files:
+  routes/secrets.js, routes/agents.js, routes/issues.js, services/heartbeat.js,
+  services/heartbeat/run-state.js, services/routines.js.
+- Markers present:
+  secrets: "Use the exact `key` from GET /api/agents/me/secrets" routes/secrets.js:299
+  issue-run-lookup: getLiveRunForIssue run-state.js:1477, routes/issues.js:5041,
+                    routes/agents.js:6685; getLiveRunIssueControlForIssue run-state.js:1486
+  routine-dispatch-conflict: isOpenRoutineExecutionConflict routines.js:519,
+                             describeErrorChain routines.js:532
+
+LIVE PATCH SCRIPTS (not modified; reported only)
+===============================================
+/usr/local/bin/paperclip-server-issue-run-lookup-patch.sh
+  SUPPORTED_VERSION="2026.1106.0" (line 22) — hardcoded gate blocks 2026.1117.0.
+  Required edit for 2026.1117.0: set SUPPORTED_VERSION="2026.1117.0" and place
+  SOURCE-issue-scoped-run-lookup.patch + PATCH-MANIFEST.txt under
+  /opt/paperclip-server-patch/2026.1117.0/. Also confirm marker/paths still match.
+
+/usr/local/bin/paperclip-server-routine-dispatch-conflict-patch.sh
+  SUPPORTED_VERSION="2026.1106.0" (line 22) — hardcoded gate blocks 2026.1117.0.
+  Required edit for 2026.1117.0: set SUPPORTED_VERSION="2026.1117.0" and place
+  SOURCE-routine-dispatch-conflict.patch under /opt/paperclip-server-patch/2026.1117.0/.
+
+/usr/local/bin/paperclip-server-secrets-patch.sh
+  No SUPPORTED_VERSION gate; it refuses only when no artifact dir exists for active version.
+  But it applies patch from dirname(dist_file) (routes/) with `patch -p1`; the 2026.1012.0
+  patch format matched that. The 2026.1117.0 SOURCE-secrets.patch here is dist-root-relative
+  (a/routes/secrets.js) for consistency. Before use, either adjust script to apply from dist root
+  or regenerate patch with routes/-relative paths. Do not deploy without reconciling this.

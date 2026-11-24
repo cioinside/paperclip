@@ -1,0 +1,21 @@
+--- a/services/heartbeat/session-preparation.js
++++ b/services/heartbeat/session-preparation.js
+@@ -125,7 +125,17 @@
+         wakeResetReason: wakeSessionResetReason,
+         preserveLegacySessionWithoutConfigMetadata: acceptedPlanContinuationWake && !acceptedPlanWakeRoutingDecision && !agentIdentity,
+     });
+-    const resetTaskSession = context.workspaceSelectionChanged === true || shouldResetTaskSessionForWake(context) || sessionConfigFreshness.reset;
++    // A human reply on a task parked in review hands the task back to the agent,
++    // which the server reports as `issue_assigned`. Resetting the task session
++    // there restarted OpenCode — and its session-title generation — on every
++    // reply. A task that already carries a session keeps it; a first assignment
++    // (no session yet) still starts clean.
++    const reassignedTaskWithSession = taskSession != null &&
++        readNonEmptyString(context.wakeReason) === "issue_assigned" &&
++        context.forceFreshSession !== true;
++    const resetTaskSession = context.workspaceSelectionChanged === true ||
++        (shouldResetTaskSessionForWake(context) && !reassignedTaskWithSession) ||
++        sessionConfigFreshness.reset;
+     const sessionResetReason = sessionConfigFreshness.reasons.join("; ") || null;
+     const taskSessionForRun = resetTaskSession ? null : taskSession;
+     const getFreshSessionHandoff = issueRef ? createNativeSessionHandoffLoader({

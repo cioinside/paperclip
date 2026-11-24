@@ -1,0 +1,85 @@
+small-model-session adapter patch — @paperclipai/adapter-opencode-local 2026.1117.0
+==============================================================================
+
+base_release       2026.1117.0
+base_dist          /root/.paperclip/cli/installs/npm/2026.1117.0/node_modules/@paperclipai/adapter-opencode-local/dist/server/runtime-config.js
+patched_files     dist/server/runtime-config.js
+issue              SYN-792
+
+What this fixes
+---------------
+OpenCode generates the session title with the auxiliary "small" model, not with
+the model that handles the session. The adapter only pinned that model through
+PAPERCLIP_OPENCODE_SMALL_MODEL, so on this instance every title-generation call
+went to a second provider ("Strata omega" / local/swift-1.5-iq3xxs) even when
+the task itself ran on guardrails-minimax/MiniMax-M3. With that provider down
+the title call failed and the session kept the default "New session - <ts>"
+title (opencode.db: 340 sessions, 290 title calls, all small=true providerID=local).
+
+Change
+------
+In prepareOpenCodeRuntimeConfig (runtime-config.js, after the existing
+PAPERCLIP_OPENCODE_SMALL_MODEL pin) the small model now defaults to the model
+that handles the session, i.e. the adapter's own config.model:
+
+    else if (configuredModel) {
+        nextConfig.small_model = `${configuredModel.provider}/${configuredModel.model}`;
+        notes.push(`Set OpenCode small_model to the session model ${nextConfig.small_model}.`);
+    }
+
+`configuredModel` is the already-parsed config.model (parseConfiguredModelRef),
+the same value the adapter passes to OpenCode as `--model`. An explicit
+PAPERCLIP_OPENCODE_SMALL_MODEL still wins, so an operator can still pin a
+different auxiliary model. When no model is configured the copied global
+config's small_model is left untouched.
+
+This mirrors what the Paperclip runner drivers already do
+(server/dist/vendor/paperclip-runner/.../opencode-server-driver.js:
+`small_model: input.options.model`).
+
+Deployment note
+---------------
+PAPERCLIP_OPENCODE_SMALL_MODEL=local/swift-1.5-iq3xxs in
+/etc/systemd/system/paperclip.service pins the auxiliary model globally and
+takes precedence over this default. The unit line was removed as part of the
+same change (SYN-792); without that removal the patch is inert.
+
+marker           Set OpenCode small_model to the session model
+upstream         not fixed upstream at v2026.1117.0 (checked 2026-11-23)
+verification     (1) node --check runtime-config.js -> OK
+                 (2) patch -p1 --batch applies cleanly to a pristine
+                     2026.1117.0 dist copy and reproduces this artifact
+                     byte-for-byte
+                 (3) focused check: prepareOpenCodeRuntimeConfig() with
+                     config.model=guardrails-minimax/MiniMax-M3 and no
+                     PAPERCLIP_OPENCODE_SMALL_MODEL writes
+                     small_model=guardrails-minimax/MiniMax-M3; with the env
+                     var set it writes the pinned value instead
+reapply          /usr/local/bin/paperclip-adapter-small-model-session-patch.sh
+                 (no-op when the marker is present; refuses to act on a version
+                 with no stored build). Wired as ExecStartPre of paperclip.service.
+backup           /var/backups/paperclip-adapter-pre-small-model-session/
+built_at         2026-11-23T06:10:00Z
+verified_at      2026-11-23T06:12:00Z
+
+ENV-pin guard — SYN-827 F-2 (added 2026-11-23)
+-----------------------------------------------
+The "small_model = session model" default is INERT as long as an uncommented
+Environment=PAPERCLIP_OPENCODE_SMALL_MODEL= line lives in /etc/systemd/system/paperclip.service,
+because the operator pin takes precedence over the new default. If that line ever comes back by a manual fix, a unit restore from backup, or some upgrade, patch A silently reverts to title-gen on the global swift/Strata model and nothing in the dist shows it. The reapply script therefore now asserts this combination: when the marker below is active AND such an uncommented Environment= pin line is present in the effective unit, it prints an explicit WARNING ("pin present in unit while session-model default is enabled -> patch A effect is overridden by operator pin") and logs the fact; exit code stays 0 in every branch (never fatal, never blocks paperclip.service). Comment-only mentions of the variable are ignored (awk filter), so today's prod unit — which only documents the var in a comment — produces no warning noise.
+
+post-restart self-check (run after EVERY paperclip.service restart; all commands are read-only):
+    UNIT=/etc/systemd/system/paperclip.service
+    ADAPT=$(readlink -f /root/.paperclip/cli/current/node_modules/@paperclipai/adapter-opencode-local)/dist/server/runtime-config.js
+    SRV=$(readlink -f /root/.paperclip/cli/current/node_modules/@paperclipai/server)/dist/services/heartbeat/session-preparation.js
+    awk '/^[[:space:]]*#/{next} /^[[:space:]]*Environment=/ && /PAPERCLIP_OPENCODE_SMALL_MODEL=/{print}' "$UNIT" \
+        | grep -q . && echo "PIN PRESENT -> patch A effect overridden by operator pin" || echo "no active operator pin — good"
+    grep -qF 'Set OpenCode small_model to the session model' "$ADAPT" && echo "adapter marker OK" || echo "adapter marker MISSING"
+    grep -qF 'A human reply on a task parked in review hands the task back to the agent' "$SRV" && echo "server marker OK" || echo "server marker MISSING"
+Expected green state after each restart: first check reports NO active pin, both markers report OK. Any other result means the live dist drifted from these artifacts or an operator pin has returned — investigate before trusting title-gen behaviour.
+
+sha256 (must match files on disk; regenerate with sha256sum after any sanctioned change)
+reapply_script_sha256=87b09171f8b581df31380fab4713c6eff003ec7955b7a7cd5ee1132ea11d7745
+dist_artifact_sha256=5f186c0b64a7f64ee28e1b2f45d157ceea96fcc1fe79d4ad17ad441b55eacea4
+source_patch_sha256=43d1d1ad27413af21ac2174835a0c4ee796a3ba5dd67a745d76240882cf75a35
+updated_at       2026-11-23T22:58:04Z SYN-827 F-2 ENV-pin guard + post-restart self-check added; SOURCE/dist untouched, byte-reproducibility chain re-verified pristine->SOURCE==artifact==live with node --check clean. Rollback of this manifest edit only: restore /var/backups/syn827-pre-env-pin-guard/<ts>/adapter-PATCH-MANIFEST.txt. Script rollback path unchanged: snapshot per apply under /var/backups/paperclip-adapter-pre-small-model-session/ plus this pre-edit backup copy.

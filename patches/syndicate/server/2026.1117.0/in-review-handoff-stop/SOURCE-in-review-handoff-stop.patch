@@ -1,0 +1,10 @@
+--- a/routes/issues.js	2026-11-21 07:27:02.849887730 +0000
++++ b/routes/issues.js	2026-11-21 07:27:02.877887462 +0000
+@@ -11025,6 +11025,7 @@
+                 nextAssigneeAgentId === null &&
+                 typeof nextAssigneeUserId === "string" &&
+                 req.actor.agentId === existing.assigneeAgentId &&
++                updateFields.status !== "in_review" &&
+                 runToStopForReassignment?.runtimeMode === "legacy" &&
+                 runToStopForReassignment.id === req.actor.runId &&
+                 runToStopForReassignment.agentId === req.actor.agentId &&

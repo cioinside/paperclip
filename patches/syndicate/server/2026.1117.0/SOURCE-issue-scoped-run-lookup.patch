@@ -1,0 +1,98 @@
+--- a/routes/agents.js	2026-11-20 22:20:39.827845494 +0000
++++ b/routes/agents.js	2026-11-21 07:07:40.241055261 +0000
+@@ -6678,8 +6678,11 @@
+                 run.issueId !== issue.id)) {
+             run = null;
+         }
+-        if (!run && issue.assigneeAgentId && issue.status === "in_progress") {
+-            const candidateRun = await heartbeat.getActiveRunIssueSummaryForAgent(issue.assigneeAgentId);
++        if (!run && issue.status === "in_progress") {
++            // Look the run up by issue identity: the agent-scoped lookup returns
++            // the agent's newest run, which belongs to another issue whenever the
++            // agent works on several issues at once and hides this issue's run.
++            const candidateRun = await heartbeat.getLiveRunForIssue(issue.companyId, issue.id);
+             const candidateIssueId = asNonEmptyString(candidateRun?.issueId);
+             if (candidateRun && candidateIssueId === issue.id) {
+                 run = candidateRun;
+--- a/routes/issues.js	2026-11-20 22:20:45.182802848 +0000
++++ b/routes/issues.js	2026-11-21 07:08:57.548308410 +0000
+@@ -5032,23 +5032,15 @@
+                 ? await heartbeat.getRunIssueControl(issue.executionRunId)
+                 : await heartbeat.getRun(issue.executionRunId)
+             : null;
+-        if ((!runToInterrupt || runToInterrupt.status !== "running") &&
+-            issue.assigneeAgentId) {
+-            const activeRun = options?.queueStateOnly
+-                ? await heartbeat.getActiveRunIssueControlForAgent(issue.assigneeAgentId)
+-                : await heartbeat.getActiveRunForAgent(issue.assigneeAgentId);
+-            const activeIssueId = activeRun &&
+-                activeRun.contextSnapshot &&
+-                typeof activeRun.contextSnapshot === "object" &&
+-                typeof activeRun.contextSnapshot
+-                    .issueId === "string"
+-                ? activeRun.contextSnapshot
+-                    .issueId
+-                : null;
+-            if (activeRun &&
+-                activeRun.status === "running" &&
+-                activeIssueId === issue.id) {
+-                runToInterrupt = activeRun;
++        if (!runToInterrupt || runToInterrupt.status !== "running") {
++            // Look the run up by issue identity: the agent-scoped lookup returns
++            // the agent's newest run, which belongs to another issue whenever the
++            // agent works on several issues at once and hides this issue's run.
++            const liveRun = options?.queueStateOnly
++                ? await heartbeat.getLiveRunIssueControlForIssue(issue.companyId, issue.id)
++                : await heartbeat.getLiveRunForIssue(issue.companyId, issue.id);
++            if (liveRun && liveRun.status === "running") {
++                runToInterrupt = liveRun;
+             }
+         }
+         return runToInterrupt?.status === "running" ? runToInterrupt : null;
+--- a/services/heartbeat.js	2026-11-20 22:20:42.691822685 +0000
++++ b/services/heartbeat.js	2026-11-21 07:08:53.330349159 +0000
+@@ -331,7 +331,7 @@
+ }
+ export function heartbeatService(db, options = {}) {
+     const { finalizeAgentStatus } = createHeartbeatAgentStatus(db);
+-    const { getAgent, resolveSessionBeforeForWakeup, getRun, getRunCleanupState, getRunExecutionWait, getRunWorkspaceSettlement, getRunStatus, ensureRuntimeState, getTaskSession, getLatestAgentConfigRevision, evaluateSessionCompaction, upsertTaskSession, resolveNormalizedUsageForSession, clearTaskSessions, resolveExplicitResumeSessionOverride, hasResolvablePriorSessionWorkspaceForWake, getRunReadAccess, getRunLogAccess, getRunWorkspaceAccess, listRuns, getRuntimeStateWithSessions, listTaskSessions, resetRuntimeSession, listEvents, getRetryExhaustedReason, getRunIssueSummary, getRunIssueControl, getActiveRunIssueControlForAgent, getActiveRunForAgent, getActiveRunIssueSummaryForAgent, } = createHeartbeatRunState(db);
++    const { getAgent, resolveSessionBeforeForWakeup, getRun, getRunCleanupState, getRunExecutionWait, getRunWorkspaceSettlement, getRunStatus, ensureRuntimeState, getTaskSession, getLatestAgentConfigRevision, evaluateSessionCompaction, upsertTaskSession, resolveNormalizedUsageForSession, clearTaskSessions, resolveExplicitResumeSessionOverride, hasResolvablePriorSessionWorkspaceForWake, getRunReadAccess, getRunLogAccess, getRunWorkspaceAccess, listRuns, getRuntimeStateWithSessions, listTaskSessions, resetRuntimeSession, listEvents, getRetryExhaustedReason, getRunIssueSummary, getRunIssueControl, getActiveRunIssueControlForAgent, getActiveRunForAgent, getLiveRunForIssue, getLiveRunIssueControlForIssue, getActiveRunIssueSummaryForAgent, } = createHeartbeatRunState(db);
+     const { toAgentOrgRow, listCompanyAgentOrgRows, groupAgentOrgRowsByCompany, getIssueExecutionContext, getPinnedSkillTestContext, getRoutineEnvForExecutionIssue, resolveResponsibleUserIdForRunSeed, resolveResponsibleUserIdForRun, resolveResponsibleUserIdForRunContext, } = createHeartbeatRunPreparation(db);
+     let shutdownInProgress = false;
+     const instanceSettings = instanceSettingsService(db);
+@@ -3356,6 +3356,8 @@
+         getRunIssueControl,
+         getActiveRunIssueControlForAgent,
+         getActiveRunForAgent,
++        getLiveRunForIssue,
++        getLiveRunIssueControlForIssue,
+         getActiveRunIssueSummaryForAgent,
+     };
+ }
+--- a/services/heartbeat/run-state.js	2026-11-20 22:20:46.142795202 +0000
++++ b/services/heartbeat/run-state.js	2026-11-21 07:08:48.784393077 +0000
+@@ -1474,6 +1474,24 @@
+                 .limit(1);
+             return run ?? null;
+         },
++        getLiveRunForIssue: async (companyId, issueId) => {
++            const [run] = await db
++                .select(heartbeatRunIssueSummaryColumns)
++                .from(heartbeatRuns)
++                .where(and(eq(heartbeatRuns.companyId, companyId), or(eq(heartbeatRuns.status, "queued"), eq(heartbeatRuns.status, "running")), or(eq(heartbeatRuns.issueId, issueId), eq(heartbeatRuns.nativeIssueId, issueId), sql`${heartbeatRuns.contextSnapshot}->>'issueId' = ${issueId}`)))
++                .orderBy(sql`case when ${heartbeatRuns.status} = 'running' then 0 else 1 end`, desc(heartbeatRuns.startedAt))
++                .limit(1);
++            return run ?? null;
++        },
++        getLiveRunIssueControlForIssue: async (companyId, issueId) => {
++            const [run] = await db
++                .select(heartbeatRunIssueControlColumns)
++                .from(heartbeatRuns)
++                .where(and(eq(heartbeatRuns.companyId, companyId), or(eq(heartbeatRuns.status, "queued"), eq(heartbeatRuns.status, "running")), or(eq(heartbeatRuns.issueId, issueId), eq(heartbeatRuns.nativeIssueId, issueId), sql`${heartbeatRuns.contextSnapshot}->>'issueId' = ${issueId}`)))
++                .orderBy(sql`case when ${heartbeatRuns.status} = 'running' then 0 else 1 end`, desc(heartbeatRuns.startedAt))
++                .limit(1);
++            return run ?? null;
++        },
+         getActiveRunIssueSummaryForAgent: async (agentId) => {
+             const [run] = await db
+                 .select(heartbeatRunIssueSummaryColumns)

@@ -1,0 +1,84 @@
+--- a/services/routines.js	2026-11-20 22:20:46.117795401 +0000
++++ b/services/routines.js	2026-11-21 07:08:07.618790770 +0000
+@@ -514,6 +514,30 @@
+     const value = id.startsWith("{") && id.endsWith("}") ? id.slice(1, -1) : id;
+     return /^(?:[0-9a-f]{4}-?){7}[0-9a-f]{4}$/i.test(value);
+ }
++// Drizzle wraps the Postgres error: its code and constraint name only live in
++// the `cause` chain, so the wrapper message alone never says what failed.
++function isOpenRoutineExecutionConflict(error) {
++    const constraint = "issues_open_routine_execution_uq";
++    let current = error;
++    for (let depth = 0; depth < 5 && current && typeof current === "object"; depth++) {
++        if (current.code === "23505" &&
++            (current.constraint_name === constraint ||
++                current.constraint === constraint ||
++                String(current.message ?? "").includes(constraint)))
++            return true;
++        current = current.cause;
++    }
++    return false;
++}
++function describeErrorChain(error) {
++    if (!(error instanceof Error))
++        return String(error);
++    const cause = error.cause;
++    if (!cause)
++        return error.message;
++    const causeMessage = cause instanceof Error ? cause.message : String(cause);
++    return causeMessage && causeMessage !== error.message ? `${error.message}: ${causeMessage}` : error.message;
++}
+ export function routineService(db, deps = {}) {
+     const issueSvc = issueService(db);
+     const secretsSvc = secretService(db);
+@@ -1521,12 +1545,7 @@
+                     });
+                 }
+                 catch (error) {
+-                    const isOpenExecutionConflict = !!error &&
+-                        typeof error === "object" &&
+-                        "code" in error &&
+-                        error.code === "23505" &&
+-                        "constraint" in error &&
+-                        error.constraint === "issues_open_routine_execution_uq";
++                    const isOpenExecutionConflict = isOpenRoutineExecutionConflict(error);
+                     if (!isOpenExecutionConflict || input.routine.concurrencyPolicy === "always_enqueue") {
+                         throw error;
+                     }
+@@ -1585,7 +1604,35 @@
+                     await notifyStatusCardIssueChange(txDb, createdIssue.companyId);
+                     await txDb.delete(issues).where(eq(issues.id, createdIssue.id));
+                 }
+-                const failureReason = error instanceof Error ? error.message : String(error);
++                // The live execution issue claimed the unique slot between the
++                // coalesce check and this issue's claim: merge into it instead of
++                // failing the run.
++                if (input.routine.concurrencyPolicy !== "always_enqueue" &&
++                    isOpenRoutineExecutionConflict(error)) {
++                    const existingIssue = await findLiveExecutionIssue(input.routine, txDb, dispatchFingerprint, {
++                        kind: issueOriginKind,
++                        id: issueOriginId,
++                    });
++                    if (existingIssue) {
++                        const status = input.routine.concurrencyPolicy === "skip_if_active" ? "skipped" : "coalesced";
++                        const updated = await finalizeRun(createdRun.id, {
++                            status,
++                            linkedIssueId: existingIssue.id,
++                            coalescedIntoRunId: existingIssue.originRunId,
++                            completedAt: triggeredAt,
++                        }, txDb);
++                        await updateRoutineTouchedState({
++                            routineId: input.routine.id,
++                            triggerId: input.trigger?.id ?? null,
++                            triggeredAt,
++                            status,
++                            issueId: existingIssue.id,
++                            nextRunAt,
++                        }, txDb);
++                        return updated ?? createdRun;
++                    }
++                }
++                const failureReason = describeErrorChain(error);
+                 const failed = await finalizeRun(createdRun.id, {
+                     status: "failed",
+                     failureReason,

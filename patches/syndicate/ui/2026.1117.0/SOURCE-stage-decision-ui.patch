@@ -1,0 +1,364 @@
+diff --git a/ui/src/components/IssueProperties.test.tsx b/ui/src/components/IssueProperties.test.tsx
+index dcba674..1629d08 100644
+--- a/ui/src/components/IssueProperties.test.tsx
++++ b/ui/src/components/IssueProperties.test.tsx
+@@ -49,6 +49,7 @@ const mockIssuesApi = vi.hoisted(() => ({
+   upsertWatchdog: vi.fn(),
+   deleteWatchdog: vi.fn(),
+   unarchiveFromInbox: vi.fn(),
++  update: vi.fn(),
+ }));
+ 
+ const mockRoutinesApi = vi.hoisted(() => ({
+@@ -662,6 +663,11 @@ describe("IssueProperties", () => {
+     mockIssuesApi.upsertWatchdog.mockResolvedValue({});
+     mockIssuesApi.deleteWatchdog.mockResolvedValue({ ok: true });
+     mockIssuesApi.unarchiveFromInbox.mockResolvedValue({ ok: true });
++    mockIssuesApi.update.mockResolvedValue({
++      id: "00000000-0000-4000-8000-000000000001",
++      issueId: "00000000-0000-4000-8000-000000000001",
++      body: "Decision comment",
++    });
+     mockAuthApi.getSession.mockResolvedValue({ user: { id: "user-1" } });
+     mockAccessApi.listUserDirectory.mockResolvedValue({
+       users: [
+@@ -2954,6 +2960,219 @@ describe("IssueProperties", () => {
+     act(() => root.unmount());
+   });
+ 
++  describe("pending execution stage decision card", () => {
++    const pendingUserStage = (extra: Record<string, unknown> = {}) =>
++      createIssue({
++        status: "in_review",
++        executionPolicy: createExecutionPolicy({
++          stages: [
++            {
++              id: "review-stage",
++              type: "review",
++              approvalsNeeded: 1,
++              participants: [{ id: "participant-1", type: "user", agentId: null, userId: "user-1" }],
++            },
++          ],
++        }),
++        executionState: createExecutionState({
++          status: "pending",
++          currentStageType: "review",
++          currentParticipant: { type: "user", agentId: null, userId: "user-1" },
++          lastDecisionOutcome: null,
++          ...extra,
++        }),
++      });
++
++    const commentBox = () =>
++      container.querySelector<HTMLTextAreaElement>('[data-testid="execution-stage-decision-comment"]')!;
++    const waitForCard = async () => {
++      await waitForAssertion(() => {
++        expect(container.querySelector('[data-testid="execution-stage-decision-card"]')).not.toBeNull();
++      });
++    };
++    const typeComment = async (value: string) => {
++      const textarea = commentBox();
++      await act(async () => {
++        const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")!.set!;
++        setter.call(textarea, value);
++        textarea.dispatchEvent(new Event("input", { bubbles: true }));
++      });
++      await flush();
++    };
++
++    const clickButton = async (button: Element | null) => {
++      await act(async () => {
++        button!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
++      });
++    };
++
++    it("offers Approve and Request changes to the human stage participant", async () => {
++      const root = renderProperties(container, { issue: pendingUserStage(), onUpdate: vi.fn() });
++      await waitForCard();
++
++      const card = container.querySelector('[data-testid="execution-stage-decision-card"]');
++      expect(card).not.toBeNull();
++      expect(card!.textContent).toContain("Review decision needed");
++      expect(container.querySelector('[data-testid="execution-stage-approve"]')).not.toBeNull();
++      expect(container.querySelector('[data-testid="execution-stage-request-changes"]')).not.toBeNull();
++
++      act(() => root.unmount());
++    });
++
++    it("keeps both buttons disabled until a decision comment is written", async () => {
++      const root = renderProperties(container, { issue: pendingUserStage(), onUpdate: vi.fn() });
++      await waitForCard();
++
++      const approve = container.querySelector<HTMLButtonElement>('[data-testid="execution-stage-approve"]')!;
++      const requestChanges = container.querySelector<HTMLButtonElement>('[data-testid="execution-stage-request-changes"]')!;
++      expect(approve.disabled).toBe(true);
++      expect(requestChanges.disabled).toBe(true);
++
++      await typeComment("   \n  ");
++      expect(approve.disabled).toBe(true);
++
++      await typeComment("Ship it.");
++      expect(approve.disabled).toBe(false);
++      expect(requestChanges.disabled).toBe(false);
++
++      act(() => root.unmount());
++    });
++
++    it("sends the comment in the same PATCH as the status change", async () => {
++      const root = renderProperties(container, { issue: pendingUserStage(), onUpdate: vi.fn() });
++      await waitForCard();
++
++      await typeComment("  Verified against the spec.  ");
++      await clickButton(container.querySelector('[data-testid="execution-stage-approve"]'));
++
++      expect(mockIssuesApi.update).toHaveBeenCalledWith("issue-1", {
++        status: "done",
++        comment: "Verified against the spec.",
++      });
++
++      act(() => root.unmount());
++    });
++
++    it("returns the task to the assignee with the comment when changes are requested", async () => {
++      const root = renderProperties(container, { issue: pendingUserStage(), onUpdate: vi.fn() });
++      await waitForCard();
++
++      await typeComment("The migration is missing the backfill step.");
++      await clickButton(container.querySelector('[data-testid="execution-stage-request-changes"]'));
++
++      expect(mockIssuesApi.update).toHaveBeenCalledWith("issue-1", {
++        status: "in_progress",
++        comment: "The migration is missing the backfill step.",
++      });
++
++      act(() => root.unmount());
++    });
++
++    it("surfaces the server rejection instead of failing silently", async () => {
++      mockIssuesApi.update.mockRejectedValueOnce(
++        new Error("Approving a review or approval stage requires a comment."),
++      );
++      const root = renderProperties(container, { issue: pendingUserStage(), onUpdate: vi.fn() });
++      await waitForCard();
++
++      await typeComment("Looks good.");
++      await clickButton(container.querySelector('[data-testid="execution-stage-approve"]'));
++      await waitForAssertion(() => {
++        expect(container.querySelector('[data-testid="execution-stage-decision-error"]')).not.toBeNull();
++      });
++
++      act(() => root.unmount());
++    });
++
++    it("hides the card from viewers who are not the stage participant", async () => {
++      mockAuthApi.getSession.mockResolvedValue({ user: { id: "user-2" } });
++      const root = renderProperties(container, { issue: pendingUserStage(), onUpdate: vi.fn() });
++      await waitForAssertion(() => {
++        expect(container.textContent).toContain("Review pending with");
++      });
++
++      expect(container.querySelector('[data-testid="execution-stage-decision-card"]')).toBeNull();
++      expect(container.textContent).toContain("Review pending with");
++
++      act(() => root.unmount());
++    });
++
++    it("hides the card when an agent holds the stage", async () => {
++      const root = renderProperties(container, {
++        issue: createIssue({
++          status: "in_review",
++          executionPolicy: createExecutionPolicy({
++            stages: [
++              {
++                id: "review-stage",
++                type: "review",
++                approvalsNeeded: 1,
++                participants: [{ id: "participant-1", type: "agent", agentId: "agent-1", userId: null }],
++              },
++            ],
++          }),
++          executionState: createExecutionState({
++            status: "pending",
++            currentStageType: "review",
++            currentParticipant: { type: "agent", agentId: "agent-1", userId: null },
++            lastDecisionOutcome: null,
++          }),
++        }),
++        onUpdate: vi.fn(),
++      });
++      await flush();
++
++      expect(container.querySelector('[data-testid="execution-stage-decision-card"]')).toBeNull();
++
++      act(() => root.unmount());
++    });
++
++    it("hides the card once changes have been requested", async () => {
++      const root = renderProperties(container, {
++        issue: pendingUserStage({
++          status: "changes_requested",
++          lastDecisionOutcome: "changes_requested",
++        }),
++        onUpdate: vi.fn(),
++      });
++      await flush();
++
++      expect(container.querySelector('[data-testid="execution-stage-decision-card"]')).toBeNull();
++
++      act(() => root.unmount());
++    });
++
++    it("clears a stale draft when the pending stage changes", async () => {
++      const props = { childIssues: [], onUpdate: vi.fn() } as unknown as ComponentProps<typeof IssueProperties>;
++      const { root, queryClient } = renderPropertiesWithQueryClient(container, {
++        ...props,
++        issue: pendingUserStage(),
++      });
++      await waitForCard();
++
++      await typeComment("draft for the previous stage");
++      expect(commentBox().value).toBe("draft for the previous stage");
++
++      await act(async () => {
++        root.render(
++          <QueryClientProvider client={queryClient}>
++            <IssueProperties
++              {...({
++                ...props,
++                issue: pendingUserStage({ currentStageId: "approval-stage", currentStageType: "approval" }),
++              } as ComponentProps<typeof IssueProperties>)}
++            />
++          </QueryClientProvider>,
++        );
++      });
++      await flush();
++
++      expect(commentBox().value).toBe("");
++
++      act(() => root.unmount());
++    });
++  });
++
+   it("renders monitor controls and clears an existing monitor", async () => {
+     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(new Date("2026-04-11T10:00:00.000Z").getTime());
+     const onUpdate = vi.fn();
+diff --git a/ui/src/components/issue-properties/IssueProperties.tsx b/ui/src/components/issue-properties/IssueProperties.tsx
+index 2ca2e7b..427dde5 100644
+--- a/ui/src/components/issue-properties/IssueProperties.tsx
++++ b/ui/src/components/issue-properties/IssueProperties.tsx
+@@ -35,6 +35,7 @@ import { selectArtifactAttachments } from "@/lib/issue-artifacts";
+ import { projectsApi } from "../../api/projects";
+ import { useCompany } from "../../context/CompanyContext";
+ import { useSidebar } from "../../context/SidebarContext";
++import { useOptionalToastActions } from "../../context/ToastContext";
+ import { queryKeys } from "../../lib/queryKeys";
+ import { ACCOUNT_BOUND_MODEL_DISCOVERY_QUERY_OPTIONS, nativeTaskModelCatalogOptions } from "../../lib/native-model-catalog";
+ import { buildCompanyUserInlineOptions, buildCompanyUserLabelMap, buildCompanyUserProfileMap, isAgentTaskTarget } from "../../lib/company-members";
+@@ -1111,6 +1112,43 @@ export function IssueProperties({
+     }
+     return `${stageLabel} pending${participantLabel ? ` with ${participantLabel}` : ""}`;
+   })();
++  const pendingStageDecision = (() => {
++    const state = issue.executionState;
++    if (!state || state.status !== "pending") return null;
++    if (state.currentStageType !== "review" && state.currentStageType !== "approval") return null;
++    const participant = state.currentParticipant;
++    if (participant?.type !== "user" || !participant.userId) return null;
++    if (participant.userId !== currentUserId) return null;
++    return state;
++  })();
++  const [stageDecisionComment, setStageDecisionComment] = useState("");
++  const stageDecisionToasts = useOptionalToastActions();
++  const submitStageDecision = useMutation({
++    mutationFn: (status: "done" | "in_progress") =>
++      issuesApi.update(issue.id, { status, comment: stageDecisionComment.trim() }),
++    onSuccess: (_updated, status) => {
++      setStageDecisionComment("");
++      void queryClient.invalidateQueries({ queryKey: queryKeys.issues.detail(issue.id) });
++      void queryClient.invalidateQueries({ queryKey: queryKeys.issues.activity(issue.id) });
++      if (companyId) invalidateInboxIssueQueries(queryClient, companyId);
++      stageDecisionToasts?.pushToast({
++        title: status === "done"
++          ? "Approved — stage cleared."
++          : "Changes requested — returned to the assignee.",
++        tone: "success",
++      });
++    },
++  });
++  const stageDecisionReady = stageDecisionComment.trim().length > 0;
++  const stageDecisionError =
++    submitStageDecision.error instanceof Error ? submitStageDecision.error.message : null;
++  const stageDecisionKey = pendingStageDecision
++    ? `${pendingStageDecision.currentStageType}:${pendingStageDecision.currentParticipant?.userId ?? ""}`
++    : null;
++  useEffect(() => {
++    setStageDecisionComment("");
++    submitStageDecision.reset();
++  }, [stageDecisionKey, issue.id, submitStageDecision.reset]);
+   useEffect(() => {
+     setMonitorAtInput(toDateTimeLocalValue(executionPolicy?.monitor?.nextCheckAt));
+     setMonitorNotesInput(executionPolicy?.monitor?.notes ?? "");
+@@ -2714,6 +2752,63 @@ export function IssueProperties({
+           </PropertyRow>
+         )}
+ 
++        {pendingStageDecision && (
++          <div
++            className="rounded-md border border-border bg-muted/40 p-3 space-y-2"
++            data-testid="execution-stage-decision-card"
++          >
++            <p className="text-sm font-medium text-foreground">
++              {pendingStageDecision.currentStageType === "review" ? "Review" : "Approval"} decision needed
++            </p>
++            <Textarea
++              value={stageDecisionComment}
++              onChange={(event) => {
++                setStageDecisionComment(event.target.value);
++                if (submitStageDecision.isError) submitStageDecision.reset();
++              }}
++              rows={3}
++              className="text-xs"
++              placeholder="Required — this becomes the decision comment on the task."
++              data-testid="execution-stage-decision-comment"
++              aria-label="Decision comment"
++            />
++            <div className="flex flex-wrap items-center gap-2">
++              <Button
++                type="button"
++                size="sm"
++                variant="outline"
++                className="h-7 text-xs"
++                disabled={!stageDecisionReady || submitStageDecision.isPending}
++                title={stageDecisionReady ? undefined : "Add a decision comment first"}
++                onClick={() => submitStageDecision.mutate("in_progress")}
++                data-testid="execution-stage-request-changes"
++              >
++                {submitStageDecision.variables === "in_progress" && submitStageDecision.isPending
++                  ? "Sending back…"
++                  : "Request changes"}
++              </Button>
++              <Button
++                type="button"
++                size="sm"
++                className="h-7 text-xs"
++                disabled={!stageDecisionReady || submitStageDecision.isPending}
++                title={stageDecisionReady ? undefined : "Add a decision comment first"}
++                onClick={() => submitStageDecision.mutate("done")}
++                data-testid="execution-stage-approve"
++              >
++                {submitStageDecision.variables === "done" && submitStageDecision.isPending
++                  ? "Approving…"
++                  : "Approve"}
++              </Button>
++            </div>
++            {stageDecisionError && (
++              <p className="text-xs text-destructive" data-testid="execution-stage-decision-error">
++                {stageDecisionError}
++              </p>
++            )}
++          </div>
++        )}
++
+         {showScheduledRetryRow && scheduledRetry?.scheduledRetryReason === "workspace_busy" ? (
+           <PropertyRow label="Workspace">
+             <span className="text-sm text-muted-foreground">Waiting for workspace</span>
