@@ -1,0 +1,213 @@
+commit ad306e030dabf924a55148723edb65381b3e9446
+Author: cioinside <cioinside@users.noreply.github.com>
+Date:   Wed Nov 11 12:26:53 2026 +0300
+
+    feat(opencode-local): fallback model on provider token/quota limit
+    
+    When a run fails with a provider-side token/quota exhaustion error
+    (e.g. MiniMax coding-plan 429), retry once on the configured
+    adapterConfig.fallbackModel (provider/model) in a fresh session and
+    attribute the result to the model actually used. The detector only
+    reads error channels (stderr + type=error events), so task content
+    mentioning limits cannot trigger a false fallback. Invalid
+    fallbackModel formats are ignored with a logged warning.
+    
+    Also: opencode v2 has no --variant flag, so the variant now rides on
+    the model ref as provider/model#variant (pre-existing uncommitted fix
+    in the same hunk).
+    
+    UI: AgentConfigForm gains an optional 'Fallback model' dropdown for
+    opencode_local agents (ModelDropdown label/hint props), plus help text.
+
+diff --git a/packages/adapters/opencode-local/src/server/execute.ts b/packages/adapters/opencode-local/src/server/execute.ts
+index 6a1f0dc1c..a37383120 100644
+--- a/packages/adapters/opencode-local/src/server/execute.ts
++++ b/packages/adapters/opencode-local/src/server/execute.ts
+@@ -52,7 +52,12 @@ import {
+   readPaperclipIssueWorkModeFromContext,
+   resolveLegacyPaperclipDesiredSkillNames,
+ } from "@paperclipai/adapter-utils/server-utils";
+-import { isOpenCodeUnknownSessionError, parseOpenCodeJsonl } from "./parse.js";
++import {
++  isOpenCodeProviderLimitError,
++  isOpenCodeUnknownSessionError,
++  parseOpenCodeJsonl,
++} from "./parse.js";
++import { isValidOpenCodeModelId } from "../index.js";
+ import {
+   ensureOpenCodeModelConfiguredAndAvailable,
+   isTruthyEnvFlag,
+@@ -240,6 +245,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
+   const command = asString(config.command, "opencode");
+   const model = asString(config.model, "").trim();
+   const variant = asString(config.variant, "").trim();
++  let fallbackModel = asString(config.fallbackModel, "").trim();
++  if (fallbackModel && !isValidOpenCodeModelId(fallbackModel)) {
++    await onLog(
++      "stderr",
++      `[paperclip] Ignoring fallbackModel "${fallbackModel}": OpenCode models must use provider/model format.\n`,
++    );
++    fallbackModel = "";
++  }
+ 
+   const workspaceContext = parseObject(context.paperclipWorkspace);
+   const workspaceCwd = asString(workspaceContext.cwd, "");
+@@ -613,24 +626,27 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
+     const printLogs = isTruthyEnvFlag(
+       env.PAPERCLIP_OPENCODE_PRINT_LOGS ?? process.env.PAPERCLIP_OPENCODE_PRINT_LOGS,
+     );
+-    const buildArgs = (resumeSessionId: string | null) => {
++    const buildArgs = (resumeSessionId: string | null, modelOverride?: string) => {
+       const args = ["run", "--format", "json"];
+       if (printLogs) args.push("--print-logs");
+       if (resumeSessionId) args.push("--session", resumeSessionId);
+-      if (model) args.push("--model", model);
+-      if (variant) args.push("--variant", variant);
++      // opencode v2 has no --variant flag; variant rides on the model as provider/model#variant.
++      // A fallback model is always used bare: the variant belongs to the primary model.
++      const effectiveModel = modelOverride ?? model;
++      if (effectiveModel) args.push("--model", !modelOverride && variant ? `${model}#${variant}` : effectiveModel);
++      else if (variant) args.push("--variant", variant);
+       if (extraArgs.length > 0) args.push(...extraArgs);
+       return args;
+     };
+ 
+-    const runAttempt = async (resumeSessionId: string | null) => {
++    const runAttempt = async (resumeSessionId: string | null, modelOverride?: string) => {
+       await hydrateFreshSessionHandoff(ctx, { resumedSession: Boolean(resumeSessionId) });
+       const { basePrompt, promptMetrics } = buildPrompt(Boolean(resumeSessionId));
+       const prompt = joinPromptSections([
+         selectInitialCommunicationGuidance(context, { resumedSession: Boolean(resumeSessionId) }),
+         basePrompt,
+       ]);
+-      const args = buildArgs(resumeSessionId);
++      const args = buildArgs(resumeSessionId, modelOverride);
+       if (onMeta) {
+         await onMeta({
+           adapterType: "opencode_local",
+@@ -672,6 +688,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
+         parsed: ReturnType<typeof parseOpenCodeJsonl>;
+       },
+       clearSessionOnMissingSession = false,
++      modelUsed?: string,
+     ): AdapterExecutionResult => {
+       if (attempt.proc.timedOut) {
+         return {
+@@ -709,7 +726,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
+         parsedError ||
+         stderrLine ||
+         `OpenCode exited with code ${synthesizedExitCode ?? -1}`;
+-      const modelId = model || null;
++      const modelId = (modelUsed ?? model) || null;
+ 
+       return {
+         exitCode: synthesizedExitCode,
+@@ -759,6 +776,55 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
+         return toResult(retry, true);
+       }
+ 
++      // Provider token/quota exhaustion (e.g. MiniMax coding-plan limit): the
++      // primary provider cannot serve the request right now, so retrying the
++      // same model is futile. If a fallback model is configured, run once more
++      // on a fresh session with that model instead of surfacing the failure.
++      if (
++        initialFailed &&
++        fallbackModel &&
++        isOpenCodeProviderLimitError(
++          initial.proc.stdout,
++          initial.rawStderr,
++          initial.parsed.errorMessage,
++        )
++      ) {
++        await onLog(
++          "stdout",
++          `[paperclip] Provider token/quota limit detected for "${model}"; retrying with fallback model "${fallbackModel}".\n`,
++        );
++        try {
++          if (executionTargetIsRemote && runtimeExecutionTarget) {
++            await ensureRemoteOpenCodeModelConfiguredAndAvailable({
++              runId,
++              executionTarget: runtimeExecutionTarget,
++              command,
++              model: fallbackModel,
++              cwd,
++              env: preparedRuntimeConfig.env,
++              timeoutSec,
++              graceSec,
++            });
++          } else if (!executionTargetIsRemote) {
++            await ensureOpenCodeModelConfiguredAndAvailable({
++              model: fallbackModel,
++              command,
++              cwd,
++              env: runtimeEnv,
++            });
++          }
++        } catch (err) {
++          const reason = err instanceof Error ? err.message : String(err);
++          await onLog(
++            "stdout",
++            `[paperclip] Fallback model "${fallbackModel}" is not available (${reason}); keeping the original failure.\n`,
++          );
++          return toResult(initial);
++        }
++        const retry = await runAttempt(null, fallbackModel);
++        return toResult(retry, true, fallbackModel);
++      }
++
+       return toResult(initial);
+     } finally {
+       try {
+diff --git a/packages/adapters/opencode-local/src/server/parse.ts b/packages/adapters/opencode-local/src/server/parse.ts
+index ee7fd4127..0152bf36a 100644
+--- a/packages/adapters/opencode-local/src/server/parse.ts
++++ b/packages/adapters/opencode-local/src/server/parse.ts
+@@ -99,3 +99,48 @@ export function isOpenCodeUnknownSessionError(stdout: string, stderr: string): b
+     haystack,
+   );
+ }
++
++const PROVIDER_LIMIT_ERROR_PATTERN =
++  /\b429\b|too many requests|rate.?limit|insufficient[_\s-]?(quota|balance|credits?|tokens?)|quota|token\s*limit|limit\s*(reached|exhausted|exceeded)|no available (models?|capacity)/i;
++
++/**
++ * Extracts the text of `type: "error"` events from an OpenCode JSONL stdout.
++ */
++export function extractOpenCodeErrorEvents(stdout: string): string[] {
++  const errors: string[] = [];
++  for (const rawLine of stdout.split(/\r?\n/)) {
++    const line = rawLine.trim();
++    if (!line) continue;
++    const event = parseJson(line);
++    if (!event || asString(event.type, "") !== "error") continue;
++    const text = errorText(event.error ?? event.message).trim();
++    if (text) errors.push(text);
++  }
++  return errors;
++}
++
++/**
++ * Detects provider-side token/quota exhaustion in an OpenCode run failure
++ * (e.g. MiniMax coding-plan limits: HTTP 429, "quota exceeded", "insufficient
++ * balance"). These are transient account-level conditions where retrying the
++ * same model is futile but a fallback model on another provider can succeed.
++ *
++ * The detector only looks at error channels (stderr + `type: "error"` events),
++ * never the agent's text output, so task content mentioning limits cannot
++ * trigger a false positive.
++ */
++export function isOpenCodeProviderLimitError(
++  stdout: string,
++  stderr: string,
++  parsedErrorMessage?: string | null,
++): boolean {
++  const haystack = [
++    ...extractOpenCodeErrorEvents(stdout),
++    stderr,
++    parsedErrorMessage ?? "",
++  ]
++    .join("\n")
++    .trim();
++
++  return PROVIDER_LIMIT_ERROR_PATTERN.test(haystack);
++}

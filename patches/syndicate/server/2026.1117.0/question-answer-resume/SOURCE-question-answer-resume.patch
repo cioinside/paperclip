@@ -1,0 +1,81 @@
+--- a/services/issue-thread-interactions.js
++++ b/services/issue-thread-interactions.js
+@@ -31,6 +31,7 @@
+ import { evaluateAgentInvokabilityFromDb } from "./agent-invokability.js";
+ import { getNativeReviewAssignment } from "./native-runtime/native-review-participant.js";
+ import { assertIssueReviewVerdictActorAllowed, isIssueReviewVerdictInteraction, } from "./issue-review-policy.js";
++import { parseIssueExecutionState } from "./issue-execution-policy.js";
+ import { issueService, executeIssuePostCommitActions, ensureAssignmentIssueAccessGrant, readAcceptedPlanConfirmationTarget, runWorkspaceIsFinalized, } from "./issues.js";
+ import { questionResponseDeliveryValues } from "./question-response-delivery.js";
+ import { lockAcceptedChatHandoffSource } from "./chat-completion-delivery.js";
+@@ -3960,10 +3961,11 @@
+                     throw unprocessable(error instanceof Error ? error.message : "Invalid question response", { code: "invalid_question_response" });
+                 }
+             }
++            const postCommitActivityPublications = [];
+             const updated = await db.transaction(async (tx) => {
+                 // Serialize against task completion/cancellation and use the persisted
+                 // status, including when the caller read the task before it closed.
+-                const [issueRow] = await tx.select({ status: issues.status }).from(issues)
++                const [issueRow] = await tx.select({ status: issues.status, assigneeAgentId: issues.assigneeAgentId, assigneeUserId: issues.assigneeUserId, executionState: issues.executionState }).from(issues)
+                     .where(and(eq(issues.id, issue.id), eq(issues.companyId, issue.companyId))).for("update");
+                 if (!issueRow)
+                     throw interactionNotFoundError();
+@@ -4000,6 +4002,48 @@
+                 if (!row)
+                     throw interactionAlreadyResolvedError();
+                 const answered = hydrateInteraction(row);
++                // A human answer must resume the agent that asked. While the task sits
++                // with a human reviewer it has no agent assignee, so the question
++                // response delivery finds no wake target and the task stops. Hand the
++                // task back to the asking agent first, exactly like the confirmation
++                // accept path does. The task keeps its status unless a review stage
++                // holds it (see below): the continuation checkout only claims
++                // in_progress/in_review tasks.
++                if (!historicalAnswer &&
++                    actor.userId &&
++                    current.createdByAgentId &&
++                    !issueRow.assigneeAgentId &&
++                    issueRow.assigneeUserId &&
++                    (issueRow.status === "in_review" || issueRow.status === "in_progress")) {
++                    // A human answer must also release the review stage hold. A task
++                    // parked under a review stage keeps that stage participant in
++                    // executionState, and the run-dispatch gate refuses to start the
++                    // resumed agent run while another principal holds the task
++                    // (issue_review_participant_changed). Release the hold the way a
++                    // changes-requested decision does: the stage stays pending for the
++                    // next round, the task goes back to the agent.
++                    const executionState = parseIssueExecutionState(issueRow.executionState);
++                    const stageHoldsTask = issueRow.status === "in_review" &&
++                        executionState?.status === "pending" &&
++                        executionState.currentParticipant !== null &&
++                        !(executionState.currentParticipant.type === "agent" &&
++                            executionState.currentParticipant.agentId === current.createdByAgentId);
++                    await issueService(db).update(issue.id, {
++                        assigneeAgentId: current.createdByAgentId,
++                        assigneeUserId: null,
++                        ...(stageHoldsTask ? {
++                            status: "in_progress",
++                            executionState: {
++                                ...executionState,
++                                status: "changes_requested",
++                                lastDecisionOutcome: null,
++                                changesRequestedCount: 0,
++                            },
++                        } : {}),
++                        actorAgentId: actor.agentId ?? null,
++                        actorUserId: actor.userId ?? null,
++                    }, tx, postCommitActivityPublications);
++                }
+                 // This answer updates conversation history only. It must not resume
+                 // the completed source run or enqueue new work for the closed task.
+                 if (!historicalAnswer) {
+@@ -4018,6 +4062,8 @@
+                 return row;
+             });
+             await touchIssue(db, issue.id, issue.companyId);
++            for (const publication of postCommitActivityPublications)
++                publishActivity(publication);
+             const answered = hydrateInteraction(updated);
+             await emitInteractionResolvedTelemetry(db, answered);
+             return answered;

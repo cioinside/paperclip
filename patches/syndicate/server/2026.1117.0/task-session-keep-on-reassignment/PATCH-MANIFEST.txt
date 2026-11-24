@@ -1,0 +1,95 @@
+task-session-keep-on-reassignment server patch — @paperclipai/server 2026.1117.0
+==============================================================================
+
+source_release   @paperclipai/server 2026.1117.0
+pristine_dist    /root/.paperclip/cli/installs/npm/2026.1117.0/node_modules/@paperclipai/server/dist
+patched_files    dist/services/heartbeat/session-preparation.js
+issue            SYN-792
+
+What this fixes
+---------------
+Paperclip restarts the agent's OpenCode session on most wakes, and OpenCode
+generates the session title once per session — so every restart costs one extra
+"small" request. The dominant reset reason on this instance is the wake reason
+`issue_assigned`: a human reply on a task that was parked in review (the task is
+assigned to the human while it waits) hands the task back to the agent, and the
+server reports that hand-back as an assignment. `shouldResetTaskSessionForWake`
+resets the task session for `issue_assigned`, so the OpenCode session — and its
+title — restarted on every human reply.
+
+Measured on this instance (run logs, /root/.paperclip/instances/default/data/run-logs):
+  "Skipping saved session resume for task ... because wake reason is issue_assigned"
+  242 occurrences — every other reset reason is a real config change
+  (83 adapter/adapter-config/secrets, 27 forceFreshSession, 25 instructions,
+  13 model changes, ...).
+Example: SYN-341 (db0ce455), two comment wakes 9 minutes apart produced two
+different OpenCode sessions (ses_e0b303816 -> ses_e0b28bbd6); opencode.log
+shows exactly one title call per session (290 of 340 sessions have one).
+
+Change
+------
+In prepareHeartbeatSession (services/heartbeat/session-preparation.js) the
+`issue_assigned` reset no longer applies when the task already carries a
+session:
+
+    const reassignedTaskWithSession = taskSession != null &&
+        readNonEmptyString(context.wakeReason) === "issue_assigned" &&
+        context.forceFreshSession !== true;
+    const resetTaskSession = context.workspaceSelectionChanged === true ||
+        (shouldResetTaskSessionForWake(context) && !reassignedTaskWithSession) ||
+        sessionConfigFreshness.reset;
+
+Scope of the exemption:
+  * first assignment of a task to an agent (no task session yet) -> unchanged,
+    the session still starts clean;
+  * a task that already has a session -> the session is kept and OpenCode
+    resumes it, so no second title generation;
+  * forceFreshSession, a changed model, a changed adapter/instructions/
+    workspace config, and workspaceSelectionChanged still reset the session;
+  * other wake reasons (issue_commented, execution_approval_requested, ...)
+    are untouched — only `issue_assigned` is exempted.
+
+marker           A human reply on a task parked in review hands the task back to the agent
+upstream         not fixed upstream at v2026.1117.0 (checked 2026-11-23)
+verification     (1) node --check session-preparation.js -> OK
+                 (2) patch -p1 --batch applies cleanly to a pristine
+                     2026.1117.0 dist copy and reproduces this artifact
+                     byte-for-byte
+                 (3) focused check: the real shouldResetTaskSessionForWake()
+                     from run-state.js combined with the patched condition
+                     yields reset=false for (task session present, wake reason
+                     issue_assigned), reset=true for (no task session) and
+                     reset=true for (forceFreshSession)
+                 (4) live end-to-end check pending: a human reply on a task
+                     parked in review must resume the OpenCode session
+                     (no new session id, no second title call in
+                     /root/.local/share/opencode/log/opencode.log)
+reapply          /usr/local/bin/paperclip-server-task-session-keep-patch.sh
+                 (no-op when the marker is present; refuses to act on a version
+                 with no stored build). Wired as ExecStartPre of paperclip.service.
+backup           /var/backups/paperclip-server-pre-task-session-keep/
+notes            The server dist is loaded at process start, so the patch goes
+                 live on the next paperclip.service restart. The restart is
+                 scheduled with the idle-wait helper
+                 (/usr/local/bin/paperclip-restart-when-idle.sh) because a
+                 direct restart kills every live agent run.
+built_at         2026-11-23T06:12:00Z
+verified_at      2026-11-23T06:14:00Z
+
+post-restart self-check — SYN-827 F-2 mirror (added 2026-11-23)
+----------------------------------------------------------------
+This patch (B, task-session keep) and the adapter small_model patch (A) go live together on the same restart, and A's effect depends on the unit carrying NO uncommented Environment=PAPERCLIP_OPENCODE_SMALL_MODEL= line (an operator pin silently overrides A's session-model default; see /opt/paperclip-adapter-patch/small-model-session-2026.1117.0/PATCH-MANIFEST.txt "ENV-pin guard" section and the assertion wired into /usr/local/bin/paperclip-adapter-small-model-session-patch.sh, which warns loudly — exit stays 0 — when pin+marker coexist). After EVERY paperclip.service restart run this read-only block; expected green = no active pin + both markers OK:
+    UNIT=/etc/systemd/system/paperclip.service
+    ADAPT=$(readlink -f /root/.paperclip/cli/current/node_modules/@paperclipai/adapter-opencode-local)/dist/server/runtime-config.js
+    SRV=$(readlink -f /root/.paperclip/cli/current/node_modules/@paperclipai/server)/dist/services/heartbeat/session-preparation.js
+    awk '/^[[:space:]]*#/{next} /^[[:space:]]*Environment=/ && /PAPERCLIP_OPENCODE_SMALL_MODEL=/{print}' "$UNIT" \
+        | grep -q . && echo "PIN PRESENT -> adapter patch A effect overridden by operator pin" || echo "no active operator pin — good"
+    grep -qF 'Set OpenCode small_model to the session model' "$ADAPT" && echo "adapter marker OK" || echo "adapter marker MISSING"
+    grep -qF 'A human reply on a task parked in review hands the task back to the agent' "$SRV" && echo "server marker OK" || echo "server marker MISSING"
+Any other result means a dist file drifted from these artifacts or an operator ENV-pin has returned; re-run /tmp/syn827-sbx acceptance (/usr/local/bin copy of run_acceptance_v2 semantics) before trusting title-gen/session-resume behaviour.
+
+sha256 (must match files on disk; regenerate with sha256sum after any sanctioned change)
+reapply_script_sha256=99571e5a35ff38e8b0ab8a2fd4056e59ac7f77cfea30076f757307cd474ff2db
+dist_artifact_sha256=c11c5d37c8108388a5a052b63be1698bc8e6f9263b2677cbaeffa7b05db4947d
+source_patch_sha256=53dc393199eced61141e2f67ecf2dcf582c1f910cd16ee5192b21c433b679829
+updated_at       2026-11-23T22:58:04Z SYN-827 F-2 post-restart self-check + sha fields added for symmetry with the adapter manifest; SOURCE/dist untouched, byte-reproducibility chain re-verified pristine->SOURCE==artifact==live with node --check clean. Rollback of this manifest edit only: restore /var/backups/syn827-pre-env-pin-guard/<ts>/server-PATCH-MANIFEST.txt. Script rollback path unchanged: snapshot per apply under /var/backups/paperclip-server-pre-task-session-keep/ plus this pre-edit backup copy.

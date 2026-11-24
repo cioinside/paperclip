@@ -1,0 +1,497 @@
+From 12079492515d4fa2ed9384077eda065d16b955f4 Mon Sep 17 00:00:00 2001
+From: cioinside <cioinside@users.noreply.github.com>
+Date: Thu, 12 Nov 2026 10:10:07 +0300
+Subject: [PATCH] fix(server): resolve an issue's live run by issue identity,
+ not by agent
+
+The active-run lookup fell back to the agent's newest running run and
+compared its issue id with the requested one. An agent that works on
+several issues at once owns several live runs, so the fallback always
+answered with a foreign run and the issue looked run-less. A board
+comment with interrupt:true did not interrupt the run, a reassignment
+passed while the old run kept working, and terminalising the issue did
+not stop its run.
+
+Resolve the run by issue identity instead: issue_id, native_issue_id or
+context_snapshot->>'issueId', company scoped, with a running run ordered
+ahead of a newer queued one. The lookup no longer needs an assignee,
+because a run belongs to its issue, not to the currently assigned agent.
+---
+ .../__tests__/agent-live-run-routes.test.ts   | 53 ++++++++++++---
+ .../issue-activity-events-routes.test.ts      |  1 +
+ ...ue-agent-mutation-ownership-routes.test.ts |  3 +-
+ ...issue-assignee-invokability-routes.test.ts |  1 +
+ .../issue-closed-workspace-routes.test.ts     |  1 +
+ .../issue-comment-cancel-routes.test.ts       |  1 +
+ .../issue-comment-reopen-routes.test.ts       |  1 +
+ .../issue-execution-policy-routes.test.ts     |  1 +
+ ...issue-update-comment-wakeup-routes.test.ts | 67 +++++++++++++++++++
+ .../issue-workspace-command-authz.test.ts     |  1 +
+ server/src/routes/issues.ts                   | 32 +++------
+ server/src/services/heartbeat.ts              |  2 +
+ server/src/services/heartbeat/run-state.ts    | 32 +++++++++
+ server/src/services/issue-run-presence.ts     | 18 ++---
+ 14 files changed, 172 insertions(+), 42 deletions(-)
+
+diff --git a/server/src/__tests__/agent-live-run-routes.test.ts b/server/src/__tests__/agent-live-run-routes.test.ts
+index bf511eb18..5d92188b2 100644
+--- a/server/src/__tests__/agent-live-run-routes.test.ts
++++ b/server/src/__tests__/agent-live-run-routes.test.ts
+@@ -13,6 +13,7 @@ const mockHeartbeatService = vi.hoisted(() => ({
+   buildRunOutputSilence: vi.fn(),
+   decorateActiveRunStatus: vi.fn(),
+   getRunIssueSummary: vi.fn(),
++  getLiveRunForIssue: vi.fn(),
+   getActiveRunIssueSummaryForAgent: vi.fn(),
+   getRunReadAccess: vi.fn(),
+   getRunLogAccess: vi.fn(),
+@@ -355,9 +356,7 @@ describe("agent live run routes", () => {
+       agentId: "agent-1",
+       issueId: "issue-1",
+     });
+-    mockHeartbeatService.getActiveRunIssueSummaryForAgent.mockResolvedValue(
+-      null,
+-    );
++    mockHeartbeatService.getLiveRunForIssue.mockResolvedValue(null);
+     mockHeartbeatService.buildRunOutputSilence.mockResolvedValue(null);
+     mockHeartbeatService.getRunReadAccess.mockResolvedValue({
+       id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+@@ -543,7 +542,7 @@ describe("agent live run routes", () => {
+     expect(res.body).not.toHaveProperty("logRef");
+   });
+ 
+-  it("ignores a stale execution run from another issue and falls back to the assignee's matching run", async () => {
++  it("ignores a stale execution run from another issue and falls back to this issue's live run", async () => {
+     mockHeartbeatService.getRunIssueSummary.mockResolvedValue({
+       id: "run-foreign",
+       status: "running",
+@@ -555,7 +554,7 @@ describe("agent live run routes", () => {
+       agentId: "agent-1",
+       issueId: "issue-2",
+     });
+-    mockHeartbeatService.getActiveRunIssueSummaryForAgent.mockResolvedValue({
++    mockHeartbeatService.getLiveRunForIssue.mockResolvedValue({
+       id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+       status: "running",
+       invocationSource: "on_demand",
+@@ -575,9 +574,10 @@ describe("agent live run routes", () => {
+     expect(mockHeartbeatService.getRunIssueSummary).toHaveBeenCalledWith(
+       "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+     );
+-    expect(
+-      mockHeartbeatService.getActiveRunIssueSummaryForAgent,
+-    ).toHaveBeenCalledWith("agent-1");
++    expect(mockHeartbeatService.getLiveRunForIssue).toHaveBeenCalledWith(
++      "company-1",
++      "issue-1",
++    );
+     expect(res.body).toMatchObject({
+       id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+       issueId: "issue-1",
+@@ -587,6 +587,43 @@ describe("agent live run routes", () => {
+     });
+   });
+ 
++  it("keeps this issue's live run visible when the agent's newest run belongs to another issue", async () => {
++    mockIssueService.getByIdentifier.mockResolvedValue({
++      id: "issue-1",
++      companyId: "company-1",
++      executionRunId: null,
++      assigneeAgentId: "agent-1",
++      status: "in_progress",
++    });
++    mockHeartbeatService.getRunIssueSummary.mockResolvedValue(null);
++    mockHeartbeatService.getLiveRunForIssue.mockResolvedValue({
++      id: "run-issue-1",
++      status: "running",
++      invocationSource: "on_demand",
++      triggerDetail: "manual",
++      startedAt: new Date("2026-04-10T09:30:00.000Z"),
++      finishedAt: null,
++      createdAt: new Date("2026-04-10T09:29:59.000Z"),
++      agentId: "agent-1",
++      issueId: "issue-1",
++    });
++
++    const res = await requestApp(await createApp(), (baseUrl) =>
++      request(baseUrl).get("/api/issues/PC1A2-1295/active-run"),
++    );
++
++    expect(res.status, JSON.stringify(res.body)).toBe(200);
++    expect(mockHeartbeatService.getLiveRunForIssue).toHaveBeenCalledWith(
++      "company-1",
++      "issue-1",
++    );
++    expect(res.body).toMatchObject({
++      id: "run-issue-1",
++      issueId: "issue-1",
++      agentId: "agent-1",
++    });
++  });
++
+   it("includes ephemeral current status fields on active run polling", async () => {
+     mockHeartbeatService.decorateActiveRunStatus.mockImplementation((run) => ({
+       ...run,
+diff --git a/server/src/__tests__/issue-activity-events-routes.test.ts b/server/src/__tests__/issue-activity-events-routes.test.ts
+index 1fc4088c9..ee0786e7f 100644
+--- a/server/src/__tests__/issue-activity-events-routes.test.ts
++++ b/server/src/__tests__/issue-activity-events-routes.test.ts
+@@ -36,6 +36,7 @@ const mockHeartbeatService = vi.hoisted(() => ({
+   reportRunActivity: vi.fn(async () => undefined),
+   getRun: vi.fn(async () => null),
+   getActiveRunForAgent: vi.fn(async () => null),
++  getLiveRunForIssue: vi.fn(async () => null),
+   cancelRun: vi.fn(async () => null),
+ }));
+ const mockFeedbackService = vi.hoisted(() => ({
+diff --git a/server/src/__tests__/issue-agent-mutation-ownership-routes.test.ts b/server/src/__tests__/issue-agent-mutation-ownership-routes.test.ts
+index d31598d25..150606a1f 100644
+--- a/server/src/__tests__/issue-agent-mutation-ownership-routes.test.ts
++++ b/server/src/__tests__/issue-agent-mutation-ownership-routes.test.ts
+@@ -125,6 +125,7 @@ const mockHeartbeatService = vi.hoisted(() => ({
+   reportRunActivity: vi.fn(async () => undefined),
+   getRun: vi.fn(async (): Promise<unknown> => null),
+   getActiveRunForAgent: vi.fn(async (): Promise<unknown> => null),
++  getLiveRunForIssue: vi.fn(async (): Promise<unknown> => null),
+   cancelRun: vi.fn(async (): Promise<unknown> => null),
+   resumeTaskRetry: vi.fn(async () => undefined),
+ }));
+@@ -2985,7 +2986,7 @@ describe("agent issue mutation checkout ownership", () => {
+ 
+     it("recognizes the caller when the active run is resolved without an issue execution lock", async () => {
+       mockIssueService.getById.mockResolvedValue(makeIssue({ status: "in_review" }));
+-      mockHeartbeatService.getActiveRunForAgent.mockResolvedValue(runningRun);
++      mockHeartbeatService.getLiveRunForIssue.mockResolvedValue(runningRun);
+       const res = await request(handoffApp({ ...ownerActor(), source: "agent_jwt" }))
+         .patch(`/api/issues/${issueId}`).send(handoff);
+       expect(res.status, JSON.stringify(res.body)).toBe(200);
+diff --git a/server/src/__tests__/issue-assignee-invokability-routes.test.ts b/server/src/__tests__/issue-assignee-invokability-routes.test.ts
+index 45f0b2e88..c9dd46a8f 100644
+--- a/server/src/__tests__/issue-assignee-invokability-routes.test.ts
++++ b/server/src/__tests__/issue-assignee-invokability-routes.test.ts
+@@ -38,6 +38,7 @@ const mockHeartbeatService = vi.hoisted(() => ({
+   reportRunActivity: vi.fn(async () => undefined),
+   getRun: vi.fn(async () => null),
+   getActiveRunForAgent: vi.fn(async () => null),
++  getLiveRunForIssue: vi.fn(async () => null),
+   cancelRun: vi.fn(async () => null),
+ }));
+ 
+diff --git a/server/src/__tests__/issue-closed-workspace-routes.test.ts b/server/src/__tests__/issue-closed-workspace-routes.test.ts
+index 9d109d1a6..b75148356 100644
+--- a/server/src/__tests__/issue-closed-workspace-routes.test.ts
++++ b/server/src/__tests__/issue-closed-workspace-routes.test.ts
+@@ -44,6 +44,7 @@ const mockHeartbeatService = vi.hoisted(() => ({
+   reportRunActivity: vi.fn(async () => undefined),
+   getRun: vi.fn(async () => null),
+   getActiveRunForAgent: vi.fn(async () => null),
++  getLiveRunForIssue: vi.fn(async () => null),
+   cancelRun: vi.fn(async () => null),
+ }));
+ 
+diff --git a/server/src/__tests__/issue-comment-cancel-routes.test.ts b/server/src/__tests__/issue-comment-cancel-routes.test.ts
+index 410f697e7..a394d881b 100644
+--- a/server/src/__tests__/issue-comment-cancel-routes.test.ts
++++ b/server/src/__tests__/issue-comment-cancel-routes.test.ts
+@@ -23,6 +23,7 @@ const mockAccessService = vi.hoisted(() => ({
+ const mockHeartbeatService = vi.hoisted(() => ({
+   getRun: vi.fn(async (): Promise<unknown> => null),
+   getActiveRunForAgent: vi.fn(async () => null),
++  getLiveRunForIssue: vi.fn(async () => null),
+ }));
+ const mockAuthoritativeQueueWakes = vi.hoisted(() => [] as Array<Record<string, unknown>>);
+ 
+diff --git a/server/src/__tests__/issue-comment-reopen-routes.test.ts b/server/src/__tests__/issue-comment-reopen-routes.test.ts
+index 1ade5a31d..fe12b392d 100644
+--- a/server/src/__tests__/issue-comment-reopen-routes.test.ts
++++ b/server/src/__tests__/issue-comment-reopen-routes.test.ts
+@@ -40,6 +40,7 @@ const mockHeartbeatService = vi.hoisted(() => ({
+   reportRunActivity: vi.fn(async () => undefined),
+   getRun: vi.fn(async (): Promise<unknown> => null),
+   getActiveRunForAgent: vi.fn(async () => null),
++  getLiveRunForIssue: vi.fn(async () => null),
+   cancelRun: vi.fn(async (): Promise<unknown> => null),
+ }));
+ 
+diff --git a/server/src/__tests__/issue-execution-policy-routes.test.ts b/server/src/__tests__/issue-execution-policy-routes.test.ts
+index 8fffd3761..cad3b7b92 100644
+--- a/server/src/__tests__/issue-execution-policy-routes.test.ts
++++ b/server/src/__tests__/issue-execution-policy-routes.test.ts
+@@ -25,6 +25,7 @@ const mockHeartbeatService = vi.hoisted(() => ({
+   reportRunActivity: vi.fn(async () => undefined),
+   getRun: vi.fn(async () => null),
+   getActiveRunForAgent: vi.fn(async () => null),
++  getLiveRunForIssue: vi.fn(async () => null),
+   cancelRun: vi.fn(async () => null),
+ }));
+ 
+diff --git a/server/src/__tests__/issue-update-comment-wakeup-routes.test.ts b/server/src/__tests__/issue-update-comment-wakeup-routes.test.ts
+index 2477493f8..9f6c02cc6 100644
+--- a/server/src/__tests__/issue-update-comment-wakeup-routes.test.ts
++++ b/server/src/__tests__/issue-update-comment-wakeup-routes.test.ts
+@@ -47,6 +47,7 @@ const mockHeartbeatService = vi.hoisted(() => ({
+   reportRunActivity: vi.fn(async () => undefined),
+   getRun: vi.fn(async (_runId: string): Promise<Record<string, unknown> | null> => null),
+   getActiveRunForAgent: vi.fn(async () => null),
++  getLiveRunForIssue: vi.fn(async () => null),
+   cancelRun: vi.fn(async (
+     _runId: string,
+     _reason: string,
+@@ -300,6 +301,8 @@ describe("issue update comment wakeups", () => {
+     mockIssueService.getWakeableParentAfterChildCompletion.mockResolvedValue(null);
+     mockIssueService.getCurrentScheduledRetry.mockResolvedValue(null);
+     mockIssueService.listReviewAttention.mockResolvedValue(new Map());
++    mockHeartbeatService.getRun.mockResolvedValue(null);
++    mockHeartbeatService.getLiveRunForIssue.mockResolvedValue(null);
+   });
+ 
+   it.each(["post", "patch"] as const)("rejects %s board messages under an inherited pause before any mutation", async (method) => {
+@@ -535,6 +538,70 @@ describe("issue update comment wakeups", () => {
+     expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
+   });
+ 
++  it("interrupts the issue's live run when the agent's newest run belongs to another issue", async () => {
++    const existing = makeIssue({
++      assigneeAgentId: PREVIOUS_AGENT_ID,
++      assigneeUserId: null,
++      executionRunId: null,
++      status: "in_progress",
++    });
++    mockIssueService.getById.mockResolvedValue(existing);
++    mockIssueService.update.mockResolvedValue(existing);
++    mockIssueService.addComment.mockResolvedValue({
++      id: "comment-interrupt-issue-run",
++      issueId: existing.id,
++      companyId: existing.companyId,
++      body: "stop the run of this issue",
++    });
++    // The agent works on several issues at once: its newest run belongs to
++    // another issue, so the agent-scoped lookup cannot find this issue's run.
++    mockHeartbeatService.getActiveRunForAgent.mockResolvedValue({
++      id: "run-other-issue",
++      companyId: existing.companyId,
++      agentId: PREVIOUS_AGENT_ID,
++      status: "running",
++      contextSnapshot: { issueId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" },
++    });
++    mockHeartbeatService.getLiveRunForIssue.mockResolvedValue({
++      id: "run-issue",
++      status: "running",
++      agentId: PREVIOUS_AGENT_ID,
++      issueId: existing.id,
++    });
++    mockHeartbeatService.getRun.mockImplementation(async (runId: string) =>
++      runId === "run-issue"
++        ? {
++            id: "run-issue",
++            companyId: existing.companyId,
++            agentId: PREVIOUS_AGENT_ID,
++            status: "running",
++            contextSnapshot: { issueId: existing.id },
++          }
++        : null,
++    );
++    mockHeartbeatService.cancelRun.mockResolvedValue({
++      id: "run-issue",
++      companyId: existing.companyId,
++      agentId: PREVIOUS_AGENT_ID,
++      status: "cancelled",
++    });
++
++    const res = await request(await createApp())
++      .patch(`/api/issues/${existing.id}`)
++      .send({ comment: "stop the run of this issue", interrupt: true });
++
++    expect(res.status).toBe(200);
++    expect(mockHeartbeatService.getLiveRunForIssue).toHaveBeenCalledWith(
++      existing.companyId,
++      existing.id,
++    );
++    expect(mockHeartbeatService.cancelRun).toHaveBeenCalledWith(
++      "run-issue",
++      "Interrupted by board comment",
++      expect.objectContaining({ errorCode: "operator_interrupted" }),
++    );
++  });
++
+   it("interrupts the active run and wakes the newly assigned agent with handoff context", async () => {
+     const existing = makeIssue({
+       assigneeAgentId: PREVIOUS_AGENT_ID,
+diff --git a/server/src/__tests__/issue-workspace-command-authz.test.ts b/server/src/__tests__/issue-workspace-command-authz.test.ts
+index 7772649c0..94e829174 100644
+--- a/server/src/__tests__/issue-workspace-command-authz.test.ts
++++ b/server/src/__tests__/issue-workspace-command-authz.test.ts
+@@ -40,6 +40,7 @@ const mockHeartbeatService = vi.hoisted(() => ({
+   reportRunActivity: vi.fn(),
+   getRun: vi.fn(),
+   getActiveRunForAgent: vi.fn(),
++  getLiveRunForIssue: vi.fn(),
+   cancelRun: vi.fn(),
+ }));
+ 
+diff --git a/server/src/routes/issues.ts b/server/src/routes/issues.ts
+index ce82b6809..e8b67266a 100644
+--- a/server/src/routes/issues.ts
++++ b/server/src/routes/issues.ts
+@@ -7628,6 +7628,7 @@ export function issueRoutes(
+ 
+   async function resolveActiveIssueRun(issue: {
+     id: string;
++    companyId: string;
+     assigneeAgentId: string | null;
+     executionRunId?: string | null;
+   }, options?: { queueStateOnly: true }) {
+@@ -7637,28 +7638,15 @@ export function issueRoutes(
+         : await heartbeat.getRun(issue.executionRunId)
+       : null;
+ 
+-    if (
+-      (!runToInterrupt || runToInterrupt.status !== "running") &&
+-      issue.assigneeAgentId
+-    ) {
+-      const activeRun = options?.queueStateOnly
+-        ? await heartbeat.getActiveRunIssueControlForAgent(issue.assigneeAgentId)
+-        : await heartbeat.getActiveRunForAgent(issue.assigneeAgentId);
+-      const activeIssueId =
+-        activeRun &&
+-        activeRun.contextSnapshot &&
+-        typeof activeRun.contextSnapshot === "object" &&
+-        typeof (activeRun.contextSnapshot as Record<string, unknown>)
+-          .issueId === "string"
+-          ? ((activeRun.contextSnapshot as Record<string, unknown>)
+-              .issueId as string)
+-          : null;
+-      if (
+-        activeRun &&
+-        activeRun.status === "running" &&
+-        activeIssueId === issue.id
+-      ) {
+-        runToInterrupt = activeRun;
++    if (!runToInterrupt || runToInterrupt.status !== "running") {
++      // Look the run up by issue identity: the agent-scoped lookup answers with
++      // the agent's newest run, which belongs to another issue whenever the
++      // agent works on several issues at once and hides this issue's run.
++      const liveRun = await heartbeat.getLiveRunForIssue(issue.companyId, issue.id);
++      if (liveRun?.status === "running") {
++        runToInterrupt = options?.queueStateOnly
++          ? await heartbeat.getRunIssueControl(liveRun.id)
++          : await heartbeat.getRun(liveRun.id);
+       }
+     }
+ 
+diff --git a/server/src/services/heartbeat.ts b/server/src/services/heartbeat.ts
+index 6bfc03289..20606a58f 100644
+--- a/server/src/services/heartbeat.ts
++++ b/server/src/services/heartbeat.ts
+@@ -899,6 +899,7 @@ export function heartbeatService(
+     getRunIssueControl,
+     getActiveRunIssueControlForAgent,
+     getActiveRunForAgent,
++    getLiveRunForIssue,
+     getActiveRunIssueSummaryForAgent,
+   } = createHeartbeatRunState(db);
+   const {
+@@ -4687,6 +4688,7 @@ export function heartbeatService(
+     getActiveRunIssueControlForAgent,
+ 
+     getActiveRunForAgent,
++    getLiveRunForIssue,
+ 
+     getActiveRunIssueSummaryForAgent,
+   };
+diff --git a/server/src/services/heartbeat/run-state.ts b/server/src/services/heartbeat/run-state.ts
+index 9a0d3c04f..bf3f864f2 100644
+--- a/server/src/services/heartbeat/run-state.ts
++++ b/server/src/services/heartbeat/run-state.ts
+@@ -13,6 +13,7 @@ import {
+   eq,
+   getTableColumns,
+   gt,
++  inArray,
+   or,
+   sql,
+ } from "drizzle-orm";
+@@ -2057,6 +2058,37 @@ export function createHeartbeatRunState(db: Db) {
+       return run ?? null;
+     },
+ 
++    /**
++     * The live run of an issue, resolved by the run's issue identity instead of
++     * by its agent: an agent running several issues at once owns several live
++     * runs, and the agent-scoped lookup answers with the newest one, which
++     * belongs to a foreign issue.
++     */
++    getLiveRunForIssue: async (companyId: string, issueId: string) => {
++      const [run] = await db
++        .select(heartbeatRunIssueSummaryColumns)
++        .from(heartbeatRuns)
++        .where(
++          and(
++            eq(heartbeatRuns.companyId, companyId),
++            inArray(heartbeatRuns.status, ["queued", "running"]),
++            or(
++              eq(heartbeatRuns.issueId, issueId),
++              eq(heartbeatRuns.nativeIssueId, issueId),
++              sql`${heartbeatRuns.contextSnapshot}->>'issueId' = ${issueId}`,
++            ),
++          ),
++        )
++        // A running run wins over a newer queued one: the running run is the
++        // one the issue actually executes, and the one callers interrupt.
++        .orderBy(
++          sql`case when ${heartbeatRuns.status} = 'running' then 0 else 1 end`,
++          desc(heartbeatRuns.startedAt),
++        )
++        .limit(1);
++      return run ?? null;
++    },
++
+     getActiveRunIssueSummaryForAgent: async (agentId: string) => {
+       const [run] = await db
+         .select(heartbeatRunIssueSummaryColumns)
+diff --git a/server/src/services/issue-run-presence.ts b/server/src/services/issue-run-presence.ts
+index c1817762b..070ca9897 100644
+--- a/server/src/services/issue-run-presence.ts
++++ b/server/src/services/issue-run-presence.ts
+@@ -7,7 +7,7 @@ import type { agentService } from "./agents.js";
+ 
+ type HeartbeatReads = Pick<
+   ReturnType<typeof heartbeatService>,
+-  "decorateActiveRunStatus" | "buildRunOutputSilence" | "getRunIssueSummary" | "getActiveRunIssueSummaryForAgent"
++  "decorateActiveRunStatus" | "buildRunOutputSilence" | "getRunIssueSummary" | "getLiveRunForIssue"
+ >;
+ 
+ export interface IssueRunPresenceIssue {
+@@ -18,12 +18,6 @@ export interface IssueRunPresenceIssue {
+   executionRunId?: string | null;
+ }
+ 
+-function asNonEmptyString(value: unknown): string | null {
+-  if (typeof value !== "string") return null;
+-  const trimmed = value.trim();
+-  return trimmed.length > 0 ? trimmed : null;
+-}
+-
+ /**
+  * The run presence a task shows in its chat: queued/running runs and the active
+  * run. Callers own resolving the task and authorizing the read; these builders
+@@ -103,10 +97,12 @@ export function issueRunPresenceService(
+       run = null;
+     }
+ 
+-    if (!run && issue.assigneeAgentId && issue.status === "in_progress") {
+-      const candidateRun = await heartbeat.getActiveRunIssueSummaryForAgent(issue.assigneeAgentId);
+-      const candidateIssueId = asNonEmptyString(candidateRun?.issueId);
+-      if (candidateRun && candidateIssueId === issue.id) {
++    if (!run && issue.status === "in_progress") {
++      // Resolve the run by issue identity: the agent-scoped lookup answers
++      // with the agent's newest run, which belongs to another issue whenever
++      // the agent works on several issues at once and hides this issue's run.
++      const candidateRun = await heartbeat.getLiveRunForIssue(issue.companyId, issue.id);
++      if (candidateRun) {
+         run = candidateRun;
+       }
+     }
+-- 
+2.51.0
+

@@ -1,0 +1,89 @@
+Paperclip UI source patches ported to release v2026.1117.0
+=========================================================
+
+Artifact
+--------
+PAPERCLIP_RUN_SCRATCH_DIR/staging-ui/fallback-model-2026.1117.0/
+Flat copy of the complete built ui/dist (581 files, including assets/, index.html, sw.js).
+Source of build: PAPERCLIP_RUN_SCRATCH_DIR/repo at tag v2026.1117.0 (commit c0f1328).
+Nothing was deployed; no live service, /root/.paperclip/cli, /opt, /usr/local/bin, or systemd was touched.
+
+Markers in staged assets (grep -rlF against ui/dist/assets)
+-----------------------------------------------------------
+fallbackModel                                    -> assets/issue-detail-CnKPR5yd.js
+execution-stage-decision-card                    -> assets/issue-detail-CnKPR5yd.js
+shrink-0 rounded-md p-1 text-muted-foreground    -> assets/issue-detail-CnKPR5yd.js (upstream in 2026.1117.0; not re-ported)
+index.html: present (7819 bytes)
+sw.js: present (28769 bytes)
+
+Verification
+------------
+Typecheck: CI=true corepack pnpm --filter @paperclipai/ui typecheck -> PASS (clean).
+  Initial run failed only on missing @paperclipai/plugin-sdk/ui declarations; after building the
+  required workspace packages it passed with no errors in patched files.
+Tests: PATH with scratch pnpm shim, CI=true corepack pnpm exec vitest run
+  ui/src/components/IssueProperties.test.tsx ui/src/components/AgentConfigForm.render.test.tsx
+  -> 2 files passed, 301 tests passed (includes 9 new stage-decision tests).
+Dependency build: CI=true NODE_ENV=development corepack pnpm --filter @paperclipai/plugin-sdk
+  --filter @paperclipai/shared --filter @paperclipai/adapter-utils --filter @paperclipai/db build -> PASS.
+  Nested scripts call bare pnpm, so a scratch-only pnpm shim
+  (PAPERCLIP_RUN_SCRATCH_DIR/opencode/pnpm) was prepended to PATH.
+UI build: CI=true NODE_ENV=production corepack pnpm build (in ui/) -> PASS (8267 modules, built in 8.91s).
+
+Files changed (line numbers after port)
+---------------------------------------
+ui/src/components/issue-properties/IssueProperties.tsx
+  38    import useOptionalToastActions
+  1115-1151 pendingStageDecision gate, comment state/mutation, invalid-comment guard,
+        draft reset keyed by stage type + participant (mutation reset in deps instead of
+        the reference eslint-disable comment)
+  2755-2810 decision card JSX with data-testids execution-stage-decision-card,
+        execution-stage-decision-comment, execution-stage-request-changes,
+        execution-stage-approve, execution-stage-decision-error
+ui/src/components/IssueProperties.test.tsx
+  52    mockIssuesApi.update
+  666-672 update mock resolves with a comment receipt (required by 2026.1117.0
+        issuesApi.update confirmedCommentResponse; reference used {} which would now fail)
+  2963-3162 new "pending execution stage decision card" describe block with all 9
+        reference test cases
+ui/src/components/AgentConfigForm.tsx
+  1141  fallbackModelOpen state
+  1434-1436 currentFallbackModelId (edit flow only)
+  1884  fallbackModel: "" on adapter config reset
+  2032-2047 fallback ModelDropdown for opencode_local edit flow (label/hint/defaultLabel)
+  4081-4082 ModelDropdown label/hint props with existing defaults
+  4105-4106 label/hint prop types
+  4183,4221 Field uses label/hint (both native and searchable presentations)
+ui/src/components/agent-config-primitives.tsx
+  32    help.fallbackModel entry
+
+Skipped / adapted
+-----------------
+- Reference patch explanatory comments were not copied (no new comments policy); behavior and
+  data-testids are preserved.
+- Description-edit patch was intentionally not applied: marker is already upstream in 2026.1117.0.
+- Reference test's useOptionalToastActions mock addition was not needed: already present at line 118
+  of the 2026.1117.0 test harness.
+- Reference test's empty update mock response was adapted to a valid comment receipt as noted above.
+- No test cases from the reference block were skipped. Full repo test suite was not run; only the
+  two relevant test files.
+
+Risks
+-----
+- Runtime fallback behavior (opencode_local retry on provider token/quota errors) is server/adapter
+  side and was not exercised here; only the UI configuration surface and built markers were verified.
+- Production build emitted pre-existing warnings (unsupported Vite native-config features, ::highlight
+  CSS pseudo-element warnings, chunk-size and ineffective dynamic-import warnings); build succeeded.
+- A pending stage decision now writes status + comment through issuesApi.update, whose
+  confirmedCommentResponse requires a valid comment receipt from the server; this matches current
+  upstream API semantics but was only validated with mocks in this scratch build.
+
+Deployed add-on: creation stage picker (SYN-546) + cache-bust r758
+-------------------------------------------------------------------
+The creation-stage picker (choose Backlog/Todo/... when creating a task) was
+ported from the local 2026.1106.0 build into the built 2026.1117.0 entry chunk.
+  marker: "Select stage"        -> assets/index-y0oACdWB-r758.js
+  re-apply script: STAGE-PICKER-ASSET-PATCH.py (in fallback-model-2026.1117.0)
+Every chunk that transitively imports the entry chunk was renamed r757 -> r758
+(255 files) and all references rewritten, so a warm browser cannot keep
+executing the pre-patch module graph.

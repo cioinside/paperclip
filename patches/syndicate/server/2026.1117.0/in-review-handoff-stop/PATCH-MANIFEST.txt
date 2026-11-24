@@ -1,0 +1,14 @@
+source_release   @paperclipai/server 2026.1117.0
+patched_files    server/dist/routes/issues.js
+issue            SYN-739
+fix              An agent that moves its own task to in_review and hands it to
+                 the board did not stop its own run (redundant extra step).
+change           add updateFields.status !== "in_review" && to isHumanSelfHandoff
+                 in PATCH /api/issues/:id (routes/issues.js ~line 11027)
+marker           updateFields.status !== "in_review" &&
+verification     patch -p1 --dry-run clean; node --check OK; marker at line 11028
+risk             hand-off run is cancelled (issue_reassigned): final assistant
+                 message and post-hand-off ragmir write are lost; hand-off
+                 comment itself is committed by the same PATCH
+boot_script      /usr/local/bin/paperclip-server-in-review-handoff-patch.sh
+built_at         2026-11-21T11:30:00Z

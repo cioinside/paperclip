@@ -1,0 +1,135 @@
+source_release   @paperclipai/server 2026.1117.0
+pristine_dist    /root/.paperclip/cli/installs/npm/2026.1117.0/node_modules/@paperclipai/server/dist
+patched_files    dist/services/issue-thread-interactions.js
+issue            SYN-761, SYN-788
+example_task     SYN-731 (interaction 42a53861-2329-4dad-b895-a47cb5276b44, answered
+                 by the board user 2026-11-21T11:55:24Z)
+fix              A human answer to an `ask_user_questions` interaction did not resume
+                 the agent. The answer path never handed the task back, and the
+                 question response delivery aborted with
+                 `question_response_target_unavailable` because the task had no agent
+                 assignee: an in_review task under a human review stage is assigned to
+                 the human (`assignee_agent_id = NULL`, `assignee_user_id = <user>`),
+                 so the delivery found no wake target and the task stopped.
+                 Delivery row evidence (live DB):
+                   issue_question_response_deliveries.delivery_id 31bb24aa-1d6c-41ba-aab9-ad80a7b5b2d3
+                   status=failed, delivery_mode=NULL, target_run_id=NULL,
+                   last_error_code=question_response_target_unavailable
+change           In `answerQuestions` (services/issue-thread-interactions.js) the
+                 answer transaction now hands the task back to the agent that asked
+                 the question before the delivery row is queued:
+                   - the locked issue row also selects assignee_agent_id/assignee_user_id
+                   - when a human answered, the interaction has a created_by_agent_id,
+                     the task has no agent assignee but a human assignee, and the task
+                     is in_review or in_progress: issue.assignee_agent_id =
+                     interaction.created_by_agent_id, issue.assignee_user_id = NULL
+                     (status is NOT changed)
+                   - activity publications of that update are published after the
+                     transaction commits
+                 This mirrors the existing confirmation-accept path
+                 (`shouldReturnIssueToCreatorOnAccept` + `issueService(db).update`),
+                 which already returns a task to the interaction creator. The status is
+                 left alone on purpose: the continuation auto-checkout in
+                 services/heartbeat.js claims only in_progress/in_review tasks, so
+                 moving the task to `todo` would make the continuation run stale and
+                 cancel it.
+change2          SYN-788: the SYN-761 hand-back stopped at the assignee. A task
+                 parked under a human review stage keeps that stage participant in
+                 `executionState`, and the run-dispatch gate
+                 (`modules/run-dispatch/domain/policy.js` ->
+                 `decideReviewParticipant`) refuses to start the resumed agent run
+                 while another principal holds the task: the queued continuation run
+                 was cancelled with `issue_review_participant_changed`
+                 (live evidence, SYN-782, 2026-11-22T20:00:33Z:
+                 paperclip.service log "claimQueuedRun: withheld queued run at the
+                 execution gate", runId 6bfb3c2c-027a-42dd-be98-e39f588abfb9).
+                 The same task then bounces back to the human on the agent's next
+                 PATCH: the execution-policy transition sees assignee != stage
+                 participant (`stageStateDrifted`) and re-pends the stage to the
+                 human. The hand-back therefore also releases the stage hold, the
+                 way a changes-requested decision does:
+                   - the locked issue row also selects execution_state
+                   - when the stage holds the task (status in_review, executionState
+                     status pending, participant is not the asking agent):
+                     status -> in_progress, executionState.status ->
+                     "changes_requested" (stage id, stage type, participant,
+                     returnAssignee and completedStageIds are preserved for the next
+                     round), lastDecisionOutcome -> null, changesRequestedCount -> 0
+                   - a task without a stage hold keeps the SYN-761 behaviour
+                     (assignee only)
+                 The released state passes the gate and the continuation checkout
+                 (`services/heartbeat.js` -> `shouldAutoCheckoutIssueForWake`
+                 refuses a pending executionState).
+marker           A human answer must also release the review stage hold.
+upstream         not fixed upstream at v2026.1117.0 (master == v2026.1117.0 for
+                 services/question-response-delivery.ts and
+                 services/issue-thread-interactions.ts, checked 2026-11-21)
+verification     (1) patch -p1 --batch applies cleanly to a pristine 2026.1117.0 dist
+                     copy; node --check services/issue-thread-interactions.js -> OK
+                 (2) marker present exactly once in the patched file
+                 (2b) SYN-788, 2026-11-22: the regenerated artifact
+                     (pristine -> patched) reproduces the live dist byte for byte,
+                     and the gate check against the platform's own
+                     `decideQueuedRunStaleness` shows the pre-fix state
+                     (in_review + pending human stage) is cancelled with
+                     `issue_review_participant_changed` while the released state
+                     (in_progress + changes_requested stage) is allowed
+                 (3) live end-to-end check after the server restart, 2026-11-21:
+                     paperclip.service restarted 13:09:01Z with the patched dist
+                     (ExecStartPre reported "patch already in place — no-op").
+                     Two agent-created ask_user_questions cards on human-assigned
+                     scratch tasks were answered through the real HTTP endpoint
+                     POST /issues/:id/interactions/:interactionId/respond as the
+                     board user:
+                       SYN-763 (status in_progress, assignee_agent_id NULL,
+                         assignee_user_id = board) -> interaction
+                         62a742b1-06c5-425b-9a8a-db700ebdc2a1 answered; issue
+                         assignee_agent_id = the asking agent, assignee_user_id = NULL,
+                         status unchanged (in_progress); delivery row status =
+                         fallback_queued, delivery_mode = wake_fallback, target_run_id =
+                         904f5e99-2915-4222-a9d7-da1e7192b3a2, last_error_code = NULL;
+                         wake request idempotency_key =
+                         question-response:62a742b1-... status claimed; the
+                         continuation run started with context_snapshot
+                         interactionStatus=answered, source=issue.interaction.respond.
+                       SYN-764 (status in_review, assignee_agent_id NULL,
+                         assignee_user_id = board) -> interaction
+                         a0182abb-0daf-4e78-a55e-061f3526bf95 answered; issue
+                         assignee_agent_id = the asking agent, assignee_user_id = NULL;
+                         delivery row status = fallback_queued, delivery_mode =
+                         wake_fallback, target_run_id =
+                         07bc4258-14ce-4fb3-af0b-65fc8231f65e, last_error_code = NULL.
+                     Negative control SYN-765: a board-created card
+                     (created_by_agent_id NULL) on the same human-assigned state was
+                     answered and the issue stayed human-assigned (assignee_agent_id
+                     still NULL) - the handoff only fires for agent-created cards.
+                     Pre-patch failure scope for the same error code:
+                     44 delivery rows with last_error_code =
+                     question_response_target_unavailable between 2026-10-03 and
+                     2026-11-21.
+reapply          /usr/local/bin/paperclip-server-question-answer-resume-patch.sh
+                 (no-op when the marker is present; refuses to act on a version with
+                 no stored build). Wired as ExecStartPre of paperclip.service.
+                 The boot script marker was switched to the SYN-788 marker so that
+                 the extended patch is re-applied after `paperclipai update`.
+backup           /var/backups/paperclip-server-pre-question-answer-resume-patch/
+notes            Applied in-place to the installed dist file. The server was restarted
+                 at 2026-11-21T13:09:01Z, so the patched module is live. Verified
+                 end-to-end after that restart (see verification).
+built_at         2026-11-21T12:30:00Z (SYN-788 rebuild: 2026-11-22T20:30:00Z)
+verified_at      2026-11-21T13:50:00Z (SYN-788 artifact+gate check: 2026-11-22T20:32:00Z)
+
+notes2           SYN-788 live deployment: the patched dist is on disk; the running
+                 process still holds the old module, so the restart is scheduled as
+                 the transient unit `paperclip-restart-when-idle-syn788`
+                 (systemd-run --unit=paperclip-restart-when-idle-syn788
+                 /usr/local/bin/paperclip-restart-when-idle.sh --max-wait 14400):
+                 it waits until the company reports no running agent and then
+                 restarts paperclip.service once. A direct restart would kill every
+                 live agent run, including the run that issues it.
+                 The already-answered SYN-782 card cannot be answered twice, so its
+                 task was released through the platform's own transition with the
+                 board credential (PATCH status=in_progress + comment): executionState
+                 became changes_requested with the review stage preserved, and the
+                 continuation run 73edcbc0-7469-46d7-80fe-b66acf88b783 started
+                 (status running, no error code).

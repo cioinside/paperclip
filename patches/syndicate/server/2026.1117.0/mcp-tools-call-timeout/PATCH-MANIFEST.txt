@@ -1,0 +1,91 @@
+mcp-tools-call-timeout server patch — @paperclipai/server 2026.1117.0
+==============================================================================
+
+source_release   @paperclipai/server 2026.1117.0
+pristine_dist    /root/.paperclip/cli/installs/npm/2026.1117.0/node_modules/@paperclipai/server/dist
+patched_files    dist/routes/tool-gateway.js
+                 dist/services/tool-gateway.js
+issue            SYN-813
+
+What this fixes
+---------------
+Every tools/call through the MCP protocol route was cut at 10 seconds,
+whatever the tool needed. The MCP branch of `handleMcpGatewayProtocol`
+called `toolGateway.executeTool({...})` without a `timeoutMs`, and the
+service then fell back to `DEFAULT_TOOL_TIMEOUT_MS = 10_000`
+(services/tool-gateway.js). The non-MCP route has always forwarded the
+caller's timeout (`routes/tool-gateway.js`: `timeoutMs: body.timeoutMs`),
+and the service clamps any timeout to at most 60s, so only the MCP path
+was affected.
+
+The client cannot fix this from the outside: an MCP client's own timeout
+(the `"timeout": 60000` in the agent's opencode MCP config) is a client-side
+abort and never reaches the gateway. Measured on this instance (SYN-807):
+`ragmir_write_file` (1.5 MB) -> HTTP 504 `{"reasonCode":"tool_timeout"}`
+after 11.96s, with the file already written on disk.
+
+Change
+------
+1. `routes/tool-gateway.js`, MCP `tools/call` branch: forward the caller's
+   timeout, exactly like the non-MCP route already does:
+
+       timeoutMs: body.timeoutMs,
+
+2. `services/tool-gateway.js`: a connection may agree a longer budget for
+   its own tools. When the caller did not ask for a timeout
+   (`input.timeoutMs === undefined`), the MCP transports take the budget
+   from the connection row they already loaded:
+
+       export function connectionToolTimeoutMs(connection, tool) {
+           const value = asRecord(connection?.config)?.toolTimeoutMs;
+           return Number.isFinite(value) ? timeoutMs(value, tool) : undefined;
+       }
+
+   applied in `executeRemoteHttpTool` (mcp_remote_http / provider_rest) and
+   in `executeLocalStdioTool` (mcp_local_stdio) — the two paths that carry
+   the upstream call's deadline.
+
+Configuration
+-------------
+`tool_connections.config.toolTimeoutMs` (number, milliseconds) is the agreed
+budget for a connection. It is clamped by the existing `timeoutMs()` helper
+to 1..60000 ms, so the gateway ceiling (60s, the same one the non-MCP route
+uses) still applies. `config` is a free-form record
+(`toolTransportConfigSchema = z.record(z.string(), z.unknown())`), so the
+key needs no schema change; it is set through the normal connection update
+route (`PUT /tool-connections/:connectionId`, `config` is replaced
+wholesale, so keep the existing keys).
+
+Defaults are unchanged: a connection without `config.toolTimeoutMs` keeps
+the 10s default, and an MCP caller that sends no timeout keeps it too.
+
+marker           export function connectionToolTimeoutMs(
+upstream         not fixed upstream at v2026.1117.0 (checked 2026-11-23:
+                 github.com/paperclipai/paperclip HEAD, and no published
+                 version up to 2026.1123.0-canary forwards a timeout in the
+                 MCP branch)
+verification     (1) node --check on both patched files -> OK
+                 (2) patch -p1 --batch applies cleanly to a pristine
+                     2026.1117.0 dist copy and reproduces the patched files
+                     byte-for-byte
+                 (3) focused test (test-mcp-tools-call-timeout.mjs, node
+                     --test) against the patched dist: 5/5 pass; against the
+                     unpatched dist the same test fails (the MCP route drops
+                     the timeout and the service has no budget lookup), so
+                     the test really covers the change
+                 (4) live end-to-end check pending: the server dist is
+                     loaded at process start, so the patch only takes effect
+                     after the next paperclip.service restart
+reapply          /usr/local/bin/paperclip-server-mcp-tools-call-timeout-patch.sh
+                 (no-op when the marker is present; refuses to act on a
+                 version with no stored build). Wired as ExecStartPre of
+                 paperclip.service.
+backup           /var/backups/paperclip-server-pre-mcp-tools-call-timeout/
+notes            The server dist is loaded at process start, so the patch
+                 goes live on the next paperclip.service restart. A direct
+                 restart kills every live agent run, so the restart goes
+                 through the idle-wait helper
+                 (/usr/local/bin/paperclip-restart-when-idle.sh) or an
+                 explicit owner decision.
+built_at         2026-11-23T14:30:00Z
+verified_at      2026-11-23T14:30:00Z

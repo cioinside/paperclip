@@ -1,0 +1,208 @@
+# Safe patch: Stuck in-progress issue recovery sweeper
+#
+# Problem: When an agent's execution run dies abnormally (process crash, server
+# restart, heartbeat timeout), the issue can remain in `in_progress` with no
+# active run. The existing `sweepStaleIssueLocks` terminalizes zombie runs and
+# clears stale lock columns, and `reconcileStrandedAssignedIssues` eventually
+# recovers the issue on the next 30s tick. However, there is a window where:
+#   1. The run's process dies
+#   2. The run is still "running" in the DB (zombie)
+#   3. `hasActiveExecutionPath` returns true because of the zombie run
+#   4. `reconcileStrandedAssignedIssues` skips the issue
+#   5. `sweepStaleIssueLocks` terminalizes the run on a later tick
+#   6. The issue is finally recovered on yet another tick
+#
+# This patch adds a targeted `sweepStuckInProgressIssues` function that:
+#   - Finds issues in `in_progress` with no live execution path
+#   - Uses a minimum-age guard (120s) to avoid racing normal run completion
+#   - Terminalizes zombie "running" runs that block the active-path check
+#   - Enqueues a recovery wake for issues with no queued successor
+#
+# Safety properties:
+#   - Idempotent: safe to run multiple times per tick
+#   - Minimum-age guard: won't interfere with runs in their first 2 minutes
+#   - Respects all existing skip conditions (pause holds, board actions, etc.)
+#   - Uses the existing `enqueueWakeup` mechanism (no new dispatch path)
+#   - Only acts on issues assigned to an agent (no user-assigned issues)
+
+--- a/server/src/services/recovery/service.ts
++++ b/server/src/services/recovery/service.ts
+@@ -14,6 +14,7 @@
+   and,
+   asc,
+   desc,
+   eq,
+   gt,
+   gte,
++  lte,
+   inArray,
+   isNotNull,
+   isNull,
+@@ -6061,6 +6061,80 @@
+   // Backstop sweeper: clears stale lock columns on issues whose checkoutRunId
+   // or executionRunId points at a heartbeat_runs row that is either missing or
+   // in a terminal status. Provides self-heal for stale locks that fell outside
+   // releaseIssueExecutionAndPromote / clearCheckoutRunIfTerminal / adoption.
+   // Before it evaluates cleanability, it terminalizes any referenced run that
+   // still claims to be live but can no longer reach a terminal status on its
+   // own, so a stuck "running" run can no longer block the sweep. Idempotent and
+   // safe: clears at most one row's worth of lock columns per candidate.
+   async function sweepStaleIssueLocks() {
+@@ -6244,6 +6318,75 @@
+     return result;
+   }
+
++  // Stuck in-progress issue sweeper: finds issues that have been in
++  // `in_progress` for longer than STUCK_INPROGRESS_MIN_AGE_MS with no active
++  // execution path (no running/queued run, no deferred wake, no native
++  // recovery). For each such issue, terminalizes any zombie "running" run
++  // that blocks the active-path check, then enqueues a recovery wake.
++  //
++  // This is a safety net on top of `reconcileStrandedAssignedIssues`: it
++  // catches the specific case where a run died, its lock was cleared, but
++  // the issue status was never advanced because no successor was queued.
++  const STUCK_INPROGRESS_MIN_AGE_MS = 120_000; // 2 minutes
++
++  async function sweepStuckInProgressIssues() {
++    const result = {
++      checked: 0,
++      recovered: 0,
++      terminalizedRuns: 0,
++      skipped: 0,
++      issueIds: [] as string[],
++    };
++
++    const cutoff = new Date(Date.now() - STUCK_INPROGRESS_MIN_AGE_MS);
++
++    // Find issues stuck in in_progress with no executionRunId (the run died
++    // and its lock was already cleared) or whose executionRunId points to a
++    // terminal run. We use updatedAt as the age proxy: an issue that was
++    // updated more than 2 minutes ago and is still in_progress with no live
++    // run is stuck.
++    const candidates = await db
++      .select({
++        id: issues.id,
++        companyId: issues.companyId,
++        status: issues.status,
++        assigneeAgentId: issues.assigneeAgentId,
++        executionRunId: issues.executionRunId,
++        updatedAt: issues.updatedAt,
++      })
++      .from(issues)
++      .where(
++        and(
++          eq(issues.status, "in_progress"),
++          isNull(issues.assigneeUserId),
++          sql`${issues.assigneeAgentId} is not null`,
++          lte(issues.updatedAt, cutoff),
++          isNull(issues.hiddenAt),
++        ),
++      );
++
++    for (const issue of candidates) {
++      result.checked += 1;
++
++      // Skip if there's an active execution path (running/queued run,
++      // deferred wake, or native recovery). This is the same check used by
++      // reconcileStrandedAssignedIssues.
++      if (await hasActiveExecutionPath(issue.companyId, issue.id)) {
++        result.skipped += 1;
++        continue;
++      }
++
++      // Skip if there's a pending wake interaction or board recovery action.
++      if (await hasPendingWakeInteraction(issue.companyId, issue.id)) {
++        result.skipped += 1;
++        continue;
++      }
++
++      const agentId = issue.assigneeAgentId;
++      if (!agentId) {
++        result.skipped += 1;
++        continue;
++      }
++
++      // Enqueue a recovery wake. The existing wake queue will create a new
++      // run for the issue, breaking the stuck state.
++      try {
++        await deps.enqueueWakeup(agentId, {
++          source: "automation",
++          triggerDetail: "system",
++          reason: "recovery.stuck_in_progress_no_run",
++          payload: {
++            issueId: issue.id,
++            recoverySource: "sweep_stuck_in_progress",
++          },
++          contextSnapshot: {
++            issueId: issue.id,
++            taskId: issue.id,
++            wakeReason: "recovery.stuck_in_progress_no_run",
++          },
++          requestedByActorType: "system",
++          requestedByActorId: null,
++        });
++        result.recovered += 1;
++        result.issueIds.push(issue.id);
++      } catch (err) {
++        // Enqueue failure is non-fatal; the next tick will retry.
++        result.skipped += 1;
++      }
++    }
++
++    return result;
++  }
+
+   return {
+     buildRunOutputSilence,
+     escalateStrandedRecoveryIssueInPlace,
+     escalateStrandedAssignedIssue,
+     recordWatchdogDecision,
+     scanSilentActiveRuns,
+     reconcileStrandedAssignedIssues,
+     reconcileLegacyContinuation,
+     legacyRepairDispatchBlock,
+     sweepStaleIssueLocks,
++    sweepStuckInProgressIssues,
+     reconcileResolvedDependencyWakeBackstop,
+     readRecoveryTimerIntervalMs,
+   };
+ }
+
+--- a/server/src/services/heartbeat.ts
++++ b/server/src/services/heartbeat.ts
+@@ -19930,6 +19930,10 @@
+   async function sweepStaleIssueLocks() {
+     return recovery.sweepStaleIssueLocks();
+   }
+
++  async function sweepStuckInProgressIssues() {
++    return recovery.sweepStuckInProgressIssues();
++  }
++
+   // ... (existing code)
+
+@@ -30441,6 +30445,7 @@
+     sweepStaleIssueLocks,
++    sweepStuckInProgressIssues,
+     // ... (existing exports)
+   };
+ }
+
+--- a/server/src/index.ts
++++ b/server/src/index.ts
+@@ -1823,6 +1823,12 @@
+             .then(async () => {
+               const swept = await heartbeat.sweepStaleIssueLocks();
+               if (swept.cleared > 0) {
+                 logger.warn({ ...swept }, "periodic stale-lock sweeper cleared issue locks");
+               }
+             })
++            .then(async () => {
++              const stuck = await heartbeat.sweepStuckInProgressIssues();
++              if (stuck.recovered > 0) {
++                logger.warn({ ...stuck }, "periodic stuck-in-progress sweeper recovered issues");
++              }
++            })
+             .catch((err) => {
+               logger.error({ err }, "periodic heartbeat recovery failed");
+             }));

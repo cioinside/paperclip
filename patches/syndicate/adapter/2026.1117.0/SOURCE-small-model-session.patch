@@ -1,0 +1,17 @@
+--- a/runtime-config.js
++++ b/runtime-config.js
+@@ -194,6 +194,14 @@
+         nextConfig.small_model = smallModel;
+         notes.push(`Pinned OpenCode small_model to ${smallModel}.`);
+     }
++    else if (configuredModel) {
++        // Without an operator pin, use the model that handles the session: OpenCode
++        // generates the session title with small_model, so a second provider there
++        // costs a request the task never asked for and fails outright when that
++        // provider is down.
++        nextConfig.small_model = `${configuredModel.provider}/${configuredModel.model}`;
++        notes.push(`Set OpenCode small_model to the session model ${nextConfig.small_model}.`);
++    }
+     await fs.writeFile(runtimeConfigPath, `${JSON.stringify(nextConfig, null, 2)}\n`, "utf8");
+     if (input.sandboxToolOomPreference) {
+         try {

@@ -1,0 +1,50 @@
+--- a/routes/tool-gateway.js
++++ b/routes/tool-gateway.js
+@@ -171,6 +171,7 @@
+                 gatewayPublicId: locator.gatewayPublicId ?? null,
+                 tool: name,
+                 parameters: params.arguments ?? {},
++                timeoutMs: body.timeoutMs,
+                 callerHeaders: req.headers,
+             }));
+             const resultRecord = result.result && typeof result.result === "object" && !Array.isArray(result.result)
+--- a/services/tool-gateway.js
++++ b/services/tool-gateway.js
+@@ -362,6 +362,13 @@
+             : DEFAULT_TOOL_TIMEOUT_MS;
+     return Math.max(1, Math.min(60_000, Math.floor(value ?? DEFAULT_TOOL_TIMEOUT_MS)));
+ }
++// A connection may agree a longer budget for its own tools. The MCP-protocol
++// route has no timeout field of its own, so without this every MCP call fell
++// back to DEFAULT_TOOL_TIMEOUT_MS (10s) no matter how long the tool needed.
++export function connectionToolTimeoutMs(connection, tool) {
++    const value = asRecord(connection?.config)?.toolTimeoutMs;
++    return Number.isFinite(value) ? timeoutMs(value, tool) : undefined;
++}
+ function sessionTtlMs(value) {
+     if (!Number.isFinite(value))
+         return DEFAULT_SESSION_TTL_MS;
+@@ -4208,6 +4215,11 @@
+         // and connections whose stored grant/catalog predates scope reduction.
+         assertGoogleChatToolArgumentsSupported(connection, entry.toolName, parameters);
+         assertGmailArchiveToolArgumentsSupported(connection, entry.toolName, parameters);
++        if (useDefaultTimeout) {
++            const configuredTimeoutMs = connectionToolTimeoutMs(connection, tool);
++            if (configuredTimeoutMs !== undefined)
++                ms = configuredTimeoutMs;
++        }
+         if (useDefaultTimeout && isRailwayConnection(connection) && entry.toolName === `${RAILWAY_TOOL_PREFIX}run-command`) {
+             ms = railwayCommandBudgetMs(parameters);
+         }
+@@ -4631,6 +4643,11 @@
+         const grant = await resolveConnectionGrant(session, connection);
+         const template = await resolveLocalStdioRuntimeTemplate(connection);
+         const env = await localStdioEnvironment(session, connection, template, grant);
++        if (useProviderDefaultTimeout) {
++            const configuredTimeoutMs = connectionToolTimeoutMs(connection, tool);
++            if (configuredTimeoutMs !== undefined)
++                ms = configuredTimeoutMs;
++        }
+         const invoke = () => callLocalStdioMcp({ connection, entry, template, env, parameters,
+             timeoutMs: useProviderDefaultTimeout && template.templateId === "paperclip.cognee-cloud" ? 60_000 : ms });
+         // Cognee is a bundled HTTP client. Provider failures are tool failures, not
