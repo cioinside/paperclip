@@ -11,8 +11,8 @@ The patch set is the one for tag `v2026.1117.0` — the version the live instanc
 | --- | --- | --- |
 | `fix(server): name the exact secret key in the access-denied answer` | source twin of `server/2026.1117.0/SOURCE-secrets.patch` | the 403 body points at `GET /api/agents/me/secrets` |
 
-The two UI patches are in `ui/2026.1117.0/` and are applied as code in
-`branch-on-upstream-master/series-4-commits.patch` — see the note below.
+The two UI patches are in `ui/2026.1117.0/` and are applied as code on branch
+`syn/upstream-master` — see the note below.
 
 ## Ready-to-push series on upstream master
 
@@ -21,13 +21,12 @@ upstream master (`base-commit.txt` names the commit): the two UI patches as
 source commits, the secrets hint and this patch set. Apply it with
 `git am series-4-commits.patch` once the fork holds upstream master.
 
-It is a file here and not a branch because the token this fork is pushed with
-has no `workflow` scope, and GitHub refuses any push into this repository that
-would create or update a file under `.github/workflows/`. Upstream master
-carries 21 new and 14 changed CI workflow files, so a branch with upstream
-master's tree cannot be pushed at all. The same scope blocks the fork's own
-`sync with upstream`. A token with `workflow` scope (or a fine-grained token
-with Contents:write and Workflows:write) removes both limits.
+It is a file here and not a branch because the token this fork was pushed with
+had no `workflow` scope, and GitHub refuses any push into this repository that
+would create or update a file under `.github/workflows/`. The token now carries
+that scope: the fork's `master` is synced with upstream master and the same patch
+set is applied as source commits on branch `syn/upstream-master`. This branch
+keeps the fork's older base and the patch set as files.
 
 ## Patch files for the published build
 
